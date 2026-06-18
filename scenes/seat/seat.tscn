@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://dba7rw8b1mk4g"]
+
+[ext_resource type="Script" path="res://scenes/seat/seat.gd" id="1_seat"]
+
+[node name="Seat" type="Control"]
+custom_minimum_size = Vector2(64, 66)
+script = ExtResource("1_seat")

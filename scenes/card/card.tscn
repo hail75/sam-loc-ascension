@@ -1,0 +1,34 @@
+[gd_scene format=3 uid="uid://1hqgcaapwdto"]
+
+[ext_resource type="Script" uid="uid://qhx7hex6tc6t" path="res://scenes/card/card.gd" id="1_card"]
+[ext_resource type="Texture2D" uid="uid://bayhlblwd2spo" path="res://assets/cards/cards.png" id="2_imta7"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_imta7"]
+atlas = ExtResource("2_imta7")
+region = Rect2(0, 0, 48, 64)
+
+[node name="Card" type="Control" unique_id=42205603]
+custom_minimum_size = Vector2(60, 80)
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_card")
+
+[node name="Shadow" type="TextureRect" parent="." unique_id=1385543203]
+modulate = Color(0.09411765, 0.03137255, 0.0627451, 0.55)
+texture_filter = 1
+layout_mode = 0
+offset_top = 4.0
+offset_right = 60.0
+offset_bottom = 84.0
+mouse_filter = 2
+texture = SubResource("AtlasTexture_imta7")
+expand_mode = 1
+
+[node name="Face" type="TextureRect" parent="." unique_id=1423773861]
+texture_filter = 1
+layout_mode = 0
+offset_right = 60.0
+offset_bottom = 80.0
+mouse_filter = 2
+texture = SubResource("AtlasTexture_imta7")
+expand_mode = 1

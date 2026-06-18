@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://dba7rxagd6c4g"]
+
+[ext_resource type="Script" path="res://scenes/ui/turn_timer.gd" id="1_timer"]
+
+[node name="TurnTimer" type="Control"]
+custom_minimum_size = Vector2(42, 42)
+script = ExtResource("1_timer")

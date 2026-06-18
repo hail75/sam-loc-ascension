@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://dba7rwqsll8rg"]
+
+[ext_resource type="Script" path="res://scenes/ui/pixel_button.gd" id="1_btn"]
+
+[node name="PixelButton" type="Control"]
+custom_minimum_size = Vector2(120, 50)
+script = ExtResource("1_btn")
