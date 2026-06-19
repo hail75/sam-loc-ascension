@@ -33,7 +33,8 @@ var _selected: Dictionary = {}
 
 func _ready() -> void:
 	_chrome.coins = coins
-	_seat_you.hero_name = "YOU · %d" % you_count
+	_seat_you.hero_name = "YOU"
+	_seat_you.card_count = you_count
 	if not Engine.is_editor_hint():
 		_play_btn.pressed.connect(_on_play)
 		_pass_btn.pressed.connect(_on_pass)
@@ -94,7 +95,7 @@ func _rank(col: int) -> int:
 
 func _on_card_input(event: InputEvent, card: Card) -> void:
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-		var sel := not _selected.get(card, false)
+		var sel: bool = not _selected.get(card, false)
 		_selected[card] = sel
 		card.position.y = -SELECT_LIFT if sel else 0.0
 		card.z_index = 1 if sel else 0

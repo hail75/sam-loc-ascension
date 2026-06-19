@@ -1,10 +1,9 @@
-[gd_scene load_steps=10 format=3 uid="uid://c0samloctablea1"]
+[gd_scene load_steps=9 format=3 uid="uid://c0samloctablea1"]
 
 [ext_resource type="Script" path="res://scenes/table/table_a.gd" id="1_table"]
 [ext_resource type="Script" path="res://scenes/table/table_chrome.gd" id="2_chrome"]
 [ext_resource type="PackedScene" uid="uid://dba7rw8b1mk4g" path="res://scenes/seat/seat.tscn" id="3_seat"]
 [ext_resource type="PackedScene" uid="uid://dba7rwqsll8rg" path="res://scenes/ui/pixel_button.tscn" id="4_btn"]
-[ext_resource type="PackedScene" uid="uid://dba7rxagd6c4g" path="res://scenes/ui/turn_timer.tscn" id="5_timer"]
 
 [sub_resource type="Gradient" id="Gradient_bg"]
 offsets = PackedFloat32Array(0, 0.55, 1)
@@ -79,7 +78,6 @@ offset_bottom = 288.0
 mouse_filter = 2
 hero_name = "SERAPHINE"
 card_count = 1
-leader = true
 
 [node name="SeatVayne" parent="." instance=ExtResource("3_seat")]
 layout_mode = 1
@@ -118,29 +116,16 @@ mouse_filter = 2
 layout_mode = 1
 anchor_top = 1.0
 anchor_bottom = 1.0
-offset_left = 28.0
-offset_top = -300.0
-offset_right = 320.0
-offset_bottom = -200.0
+offset_left = 24.0
+offset_top = -468.0
+offset_right = 184.0
+offset_bottom = -288.0
 grow_vertical = 0
 mouse_filter = 2
-hero_name = "YOU · 10"
-avatar_size = 88.0
+hero_name = "YOU"
+card_count = 10
 active = true
-show_badge = false
-label_right = true
-
-[node name="TurnTimer" parent="." instance=ExtResource("5_timer")]
-layout_mode = 1
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 608.0
-offset_top = -300.0
-offset_right = 692.0
-offset_bottom = -216.0
-grow_vertical = 0
-mouse_filter = 2
-value = "12"
+turn_progress = 0.7
 
 [node name="Hand" type="Control" parent="."]
 layout_mode = 1

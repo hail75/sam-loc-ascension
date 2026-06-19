@@ -49,7 +49,7 @@ func _gui_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	var face_size := Vector2(size.x, size.y - DROP)
-	var disabled := variant == Variant.DISABLED
+	var disabled: bool = variant == Variant.DISABLED
 
 	# Hard drop shadow (hidden while pressed / disabled).
 	if not _pressed and not disabled:

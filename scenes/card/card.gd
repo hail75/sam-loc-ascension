@@ -61,7 +61,7 @@ func _card_texture() -> AtlasTexture:
 	return at
 
 func _apply() -> void:
-	if not is_node_ready():
+	if _face == null or _shadow == null:
 		return
 	var card_size := Vector2(float(card_width), card_height())
 	custom_minimum_size = card_size
