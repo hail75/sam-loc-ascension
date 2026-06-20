@@ -104,14 +104,18 @@ func _draw() -> void:
 
 	_draw_label(face, ink)
 
-## Centered label with a hard pixel drop-shadow (embossed look), nudged a touch
-## right so DearPix's side bearings read optically centered rather than left-heavy.
+## Centered label with a hard pixel drop-shadow (embossed look).
 func _draw_label(face: Rect2, ink: Color) -> void:
-	const NUDGE_X := 6.0
+	# DearPix has near-symmetric side bearings, so plain advance-width centering
+	# reads optically centered for most words — no flat fudge (it shoved short
+	# words like THÔI visibly right). The exception is "ĐÁNH": the barred Đ
+	# overhangs left, pulling the ink left of centre, so nudge just that word right.
+	const OPTICAL_NUDGE := {"ĐÁNH": 4.0}
+	var nudge_x: float = OPTICAL_NUDGE.get(text, 0.0)
 	const SHADOW := Vector2(3.0, 4.0)
 	var ts := FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size)
 	var pos := face.position + (face.size - ts) * 0.5 \
-		+ Vector2(NUDGE_X, FONT.get_ascent(font_size))
+		+ Vector2(nudge_x, FONT.get_ascent(font_size))
 	# Emboss with a colour that actually contrasts the ink: a light highlight
 	# under dark text (gold button), a dark shadow under light text (crimson).
 	# (A dark shadow behind dark ink is invisible — which is the bug.)

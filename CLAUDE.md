@@ -76,10 +76,16 @@ make that migration painless:
   phones but grows (toward ~960) on squarer tablets and taller on thin phones. In layout
   code read the **live** size (`size.x` / `_vw()`), never hardcode 720; the felt/vignette
   must fill the real viewport. `_relayout()` (re-run on `resized`) spreads the seats and
-  eases the player zone — keep it idempotent.
-- **The Godot editor re-saves open `.tscn` files and will revert your file edits to them.**
-  For volatile UI props (button text/size, etc.) set them from code in `_ready` so they
-  survive; only commit `.tscn` changes when the scene isn't open in the editor.
+  eases the player zone — keep it idempotent. It also insets the top row by
+  `DisplayServer.get_display_safe_area()` so a punch-hole/notch can't clip the top seat.
+- **Portrait is locked** via `display/window/handheld/orientation=1` so the phone can't
+  auto-rotate.
+- **The Godot editor re-saves open `.tscn` files AND `project.godot`, reverting your file
+  edits to them.** For volatile UI props (button text/size, etc.) set them from code in
+  `_ready` so they survive; for `project.godot` edit it with the editor CLOSED, or change it
+  through the editor's Project Settings UI. (NB: the base resolution stays **720×1280** —
+  with `canvas_items` stretch it's already pixel-scaled to the device, so bumping it to
+  1080×1920 buys nothing visually and just forces a full layout rescale.)
 
 ## Design system (authoritative palette — use exact hex)
 - felt `#7a1226` · table `#6a0f20` · frame `#3d0a14` · outline `#180810` · ember `#ef8b2c`
@@ -87,7 +93,8 @@ make that migration painless:
 - card-face `#cfc7be` · pip-red `#781e37`
 - Fonts: **DearPix** for display/numerals and body/labels.
 - Aesthetic: warm, rich, polished pixel art. Portrait phone, base resolution **720×1280**,
-  stretch mode `canvas_items`, aspect `expand`.
+  stretch mode `canvas_items`, aspect `expand`. (All UI layout constants live in this
+  720-wide design space.)
 
 ## Assets
 **Do not invent or generate art assets — use the existing ones.** Splash art and sprites

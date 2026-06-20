@@ -12,7 +12,7 @@ signal declared(player: int, data: GameStateData)
 signal rejected(reason: String)
 signal match_ended(winner: int, deltas: Array, balances: Array, data: GameStateData)
 
-const START_BALANCE := 1000
+const START_BALANCE := 8080
 
 var data: GameStateData
 var balances: Array = []          # persistent per-player money, survives re-deals

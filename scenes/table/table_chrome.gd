@@ -12,13 +12,19 @@ const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
 	set(v):
 		banner_text = v
 		queue_redraw()
+## Pushed in by the table controller: extra top padding (design units) so the
+## menu glyph clears a device punch-hole / notch, matching the seat row.
+@export var top_inset: float = 0.0:
+	set(v):
+		top_inset = v
+		queue_redraw()
 
 func _draw() -> void:
 	# Authored in 720x1280 space; this Control fills the (height-expanding)
 	# viewport, so top items pin to the top, the middle group tracks the
 	# vertical centre, and the player row pins to the bottom.
 	var cy := size.y * 0.5
-	_menu(Rect2(size.x - 84.0, 24.0, 60.0, 60.0))
+	_menu(Rect2(size.x - 84.0, 24.0 + top_inset, 60.0, 60.0))
 	_banner(cy + 20.0, banner_text)
 
 func _menu(r: Rect2) -> void:

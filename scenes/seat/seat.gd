@@ -10,6 +10,7 @@ extends Control
 ## as a danger marker. Rendering only — no rules, no timing.
 
 const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
+const NUM_FONT: Font = preload("res://assets/fonts/Pixelta.ttf")  # numerals: card count + balance
 const GAP := 8.0
 const BADGE := 40.0
 const RADIUS := 18.0
@@ -55,16 +56,16 @@ const DANGER_PROGRESS := 0.5   # last 10s of a 20s turn: ring reddens
 		avatar = v
 		queue_redraw()
 ## Player money, shown as a coin + amount under the name.
-@export var balance: int = 1000:
+@export var balance: int = 8080:
 	set(v):
 		balance = v
 		_refresh()
 
 const NAME_SIZE := 34      # readable on an HD phone screen, not tiny pixels
-const BAL_SIZE := 30
+const BAL_SIZE := 38       # bigger so digits read clearly (0 vs 8) at a glance
 const NAME_H := 42.0
-const BAL_H := 38.0
-const COIN_R := 9.0        # little coin glyph radius
+const BAL_H := 46.0
+const COIN_R := 11.0       # little coin glyph radius (tracks the bigger balance)
 const COIN_GAP := 8.0      # coin -> number spacing
 
 var _t := 0.0
@@ -94,7 +95,7 @@ func _plate_size() -> Vector2:
 	return Vector2(maxf(nw, bw) + 28.0, NAME_H + BAL_H)
 
 func _bal_text_width() -> float:
-	return FONT.get_string_size(_commas(balance), HORIZONTAL_ALIGNMENT_LEFT, -1.0, BAL_SIZE).x
+	return NUM_FONT.get_string_size(_commas(balance), HORIZONTAL_ALIGNMENT_LEFT, -1.0, BAL_SIZE).x
 
 func _draw() -> void:
 	var bob := 0.0
@@ -213,7 +214,7 @@ func _draw_badge(av: Rect2) -> void:
 	draw_circle(bc, BADGE * 0.5 + 4.0, Palette.OUTLINE)
 	draw_circle(bc, BADGE * 0.5, fill)
 	PixelDraw.text_centered(self, Rect2(bc - Vector2(BADGE, BADGE) * 0.5, Vector2(BADGE, BADGE)),
-			FONT, 30, str(card_count), ink)
+			NUM_FONT, 30, str(card_count), ink)
 
 func _draw_plate(_av: Rect2) -> void:
 	var top := avatar_size + GAP
@@ -224,13 +225,15 @@ func _draw_plate(_av: Rect2) -> void:
 	var bal := _commas(balance)
 	var group := COIN_R * 2.0 + COIN_GAP + _bal_text_width()
 	var bx := (size.x - group) * 0.5
-	var by := top + NAME_H
+	var by := top + NAME_H - 10.0   # tuck the balance up closer to the name
 	var cc := Vector2(bx + COIN_R, by + BAL_H * 0.5)
-	draw_circle(cc, COIN_R + 1.0, Palette.OUTLINE)
+	# Outline + inner dot share one shade, just a touch darker than the coin.
+	var coin_dk := Palette.COIN.darkened(0.18)
+	draw_circle(cc, COIN_R + 3.0, coin_dk)
 	draw_circle(cc, COIN_R, Palette.COIN)
-	draw_circle(cc, COIN_R * 0.4, Color("574014"))
+	draw_circle(cc, COIN_R * 0.4, coin_dk)
 	PixelDraw.text_centered(self, Rect2(bx + COIN_R * 2.0 + COIN_GAP, by, _bal_text_width(), BAL_H),
-			FONT, BAL_SIZE, bal, Palette.GOLD)
+			NUM_FONT, BAL_SIZE, bal, Palette.GOLD)
 
 func _commas(n: int) -> String:
 	var s := str(absi(n))

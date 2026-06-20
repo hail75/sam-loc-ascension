@@ -19,20 +19,31 @@ const DECK_STATES: Array[Texture2D] = [
 ]
 
 const BASE_W := 720.0
-const HAND_W := 100.0                      # card width in hand / last-played
-const CARD_H := HAND_W * 64.0 / 48.0       # matches the sheet cell aspect
+const HAND_W := 112.0                      # card width in your hand fan
+                                           # (bigger for readability; the fan
+                                           # stays in HAND_AVAIL so it just
+                                           # overlaps a little more)
+const CELL_W := 48.0                       # a card cell's source width in cards.png
+const CARD_H := HAND_W * 64.0 / CELL_W     # matches the sheet cell aspect
+const CARD_PX := HAND_W / CELL_W           # on-screen pixels per source texel for a full card
 const HAND_AVAIL := 664.0                  # fan track width
 const HAND_MAX_STEP := 66.0
 const LP_OVERLAP := 28.0                   # last-played card overlap
 const SELECT_LIFT := 28.0
+const REVEAL_W := 58                       # card width for the end-of-round opponent reveal
+const REVEAL_STEP := 28.0                  # vertical gap between revealed stacked cards
+const PILE_FADE := 0.28                     # how long the table pile takes to fade away
+const WIN_SETTLE := 0.6                     # let the winning play rest on the table before it fades
 
 const TURN_TIME := 20.0                     # seconds a turn (and the báo sâm window) lasts; the seat ring drains over this for everyone
 const BOT_DELAY_MIN := 1.5                  # bots act somewhere inside their turn
 const BOT_DELAY_MAX := 4.0
 const FLY_TIME := 0.32                      # play-to-centre flight
-const WIN_PAUSE := 1.6                      # hold on the winner before re-dealing
+const WIN_PAUSE := 3.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
+const WIN_FADE := 0.45                      # the reveal cards + amount pops ease out before the next deal
 const DEAL_FLIGHT := 0.26                   # one card's deck->seat flight (longer = smoother)
 const DEAL_STAGGER := 0.045                 # gap between dealt cards (shorter = faster overall)
+const DEAL_FLY_SCALE := 0.75                # dealt cards (and the deck stack) fly/show at 0.75 scale
 const FLIP_TIME := 0.16                     # your cards flipping face-up
 
 @onready var _chrome: TableChrome = $Chrome
@@ -51,10 +62,13 @@ const FLIP_TIME := 0.16                     # your cards flipping face-up
 }
 
 const POP_FONT: Font = preload("res://assets/fonts/dearpix.ttf")
+const NUM_FONT: Font = preload("res://assets/fonts/Pixelta.ttf")  # numerals: the +/- balance pop
 const POP_GOLD := Color("f0d68a")     # winner gain
 const POP_GREY := Color("9d978d")     # loser loss (muted)
 
 var last_played: Array = []        # cards currently resting on the table
+var _revealed: Array = []          # opponents' end-of-round reveal stacks; cleared on next deal
+var _pops: Array = []              # floating +/- amount labels; live until the next deal
 var _selected: Dictionary = {}     # Card -> bool
 var _my_turn := false
 var _bao_window := false            # the báo sâm claim window is open (buttons mean claim/thôi)
@@ -76,6 +90,8 @@ func _ready() -> void:
 	_play_btn.font_size = 54
 	_pass_btn.text = "THÔI"
 	_pass_btn.font_size = 54
+	# Player seat label in code too (survives the editor re-saving the .tscn).
+	_seats[0].hero_name = "BẠN"
 	_play_btn.pressed.connect(_on_play)
 	_pass_btn.pressed.connect(_on_pass)
 	GameState.dealt.connect(_on_dealt)
@@ -133,6 +149,8 @@ func _on_dealt(data: GameStateData) -> void:
 	# Reset the table to empty and hide the count badges while we deal.
 	last_played = []
 	_rebuild_last_played()
+	_clear_revealed()   # drop last round's revealed opponent hands
+	_clear_pops()       # and the floating +/- amount labels
 	for n in _hand.get_children():
 		n.free()
 	_selected.clear()
@@ -180,6 +198,9 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 				return
 			var back := _make_back()
 			back.z_index = 7
+			# Dealt cards fly at 0.75 scale (scaled around their centre).
+			back.pivot_offset = Vector2(HAND_W, CARD_H) * 0.5
+			back.scale = Vector2.ONE * DEAL_FLY_SCALE
 			back.position = deck_tl
 			add_child(back)
 			var target: Vector2
@@ -194,9 +215,14 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 			tw.tween_property(back, "position", target, DEAL_FLIGHT) \
 				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 			if is_bot:
-				# Fade into the avatar instead of blinking out.
+				# Bots' cards stay at 0.75 and fade into the avatar.
 				tw.tween_property(back, "modulate:a", 0.0, 0.12)
 				tw.tween_callback(back.queue_free)
+			else:
+				# Your card grows from 0.75 up to full size, landing in the hand at
+				# 112 — the scale-up runs over the back half of the flight.
+				tw.parallel().tween_property(back, "scale", Vector2.ONE, DEAL_FLIGHT * 0.5) \
+					.set_delay(DEAL_FLIGHT * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 			# Thin the pile as it empties: step full -> single across the deal.
 			dealt += 1
 			_deck_apply(DECK_STATES[mini(dealt * DECK_STATES.size() / total, DECK_STATES.size() - 1)])
@@ -244,7 +270,7 @@ func _show_deck(centre: Vector2) -> void:
 	_hide_deck()
 	# Anchor the deck by its bottom edge: the full deck starts centred on `centre`,
 	# and thinner state textures keep this bottom line so the top lowers in place.
-	var full_h := HAND_W * 1.2 * float(DECK_TEX.get_height()) / float(DECK_TEX.get_width())
+	var full_h := float(DECK_TEX.get_height()) * CARD_PX * DEAL_FLY_SCALE
 	_deck_bottom = centre + Vector2(0.0, full_h * 0.5)
 	_deck_shadow = _new_deck_rect(5)
 	_deck = _new_deck_rect(6)
@@ -266,8 +292,12 @@ func _new_deck_rect(z: int) -> TextureRect:
 func _deck_apply(tex: Texture2D) -> void:
 	if _deck == null:
 		return
-	var dw := HAND_W * 1.2
-	var dh := dw * float(tex.get_height()) / float(tex.get_width())
+	# Render the deck at the SAME pixels-per-texel as a 0.75-scale card. The deck
+	# art is 49px wide vs a card's 48px, so we size by its OWN texture pixels — not
+	# by card width — or the two wouldn't share a scale.
+	var px := CARD_PX * DEAL_FLY_SCALE
+	var dw := float(tex.get_width()) * px
+	var dh := float(tex.get_height()) * px
 	var size := Vector2(dw, dh)
 	var pos := _deck_bottom - Vector2(dw * 0.5, dh)   # bottom-centre anchored
 	# Offset tracks WIDTH, so it matches the cards' shadow gap and stays constant
@@ -377,43 +407,92 @@ func _on_passed(_player: int, data: GameStateData) -> void:
 
 func _on_match_ended(winner: int, deltas: Array, balances: Array, _data: GameStateData) -> void:
 	_set_my_turn(false)
+	# The match is over: freeze every countdown. Bump the generation so any stale
+	# bot/timeout await bails, kill the ring tween, and clear `active` on all seats
+	# so no turn ring keeps draining and no avatar keeps bobbing.
+	_gen += 1
 	if _turn_tween:
 		_turn_tween.kill()
+	for p in _seats:
+		_seats[p].active = false
 	if _data.bao_sam != -1:
 		var ok := not _data.bao_sam_failed
-		_chrome.banner_text = "%s BÁO SÂM %s" % [_seats[_data.bao_sam].hero_name, "THẮNG" if ok else "THUA"]
+		_chrome.banner_text = "BÁO SÂM THÀNH CÔNG" if ok else "BÁO SÂM THẤT BẠI"
 	else:
 		_chrome.banner_text = "%s THẮNG" % _seats[winner].hero_name
+	# The winning play is still FLYING to the table when match_ended fires (see
+	# _on_played: the cards only land + register as `last_played` after FLY_TIME).
+	# Wait for them to land and rest a beat so the final play reads, THEN fade the
+	# whole pile away and — once it's gone — bring up the reveal and the +/- pops
+	# together as one beat.
+	await get_tree().create_timer(FLY_TIME + WIN_SETTLE).timeout
+	_fade_out_pile()
+	await get_tree().create_timer(PILE_FADE).timeout
+	_reveal_opponent_hands(_data)     # show what the others were holding
 	for p in _seats:
 		var gain: bool = deltas[p] >= 0
 		var text := "+%d" % deltas[p] if gain else str(deltas[p])
-		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY)
+		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY, gain)
 		_seats[p].balance = balances[p]   # tick to the settled amount
 	await get_tree().create_timer(WIN_PAUSE).timeout
+	await _fade_out_win()   # ease the reveal cards + pops away before the next deal
 	GameState.new_match()
 
-## Floating "+30" / "-10" over a seat that rises and fades out.
-func _pop_balance(seat: Seat, text: String, color: Color) -> void:
+## Floating "+30" / "-10" over a seat. It punches in (overshoot scale) and then
+## STAYS put — visible for the whole win moment, exactly as long as the revealed
+## opponent hands — and is cleared on the next deal (see `_clear_pops`). The
+## winner's gain is bigger and pops harder so it's obvious who took the pot.
+func _pop_balance(seat: Seat, text: String, color: Color, gain: bool) -> void:
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_override("font", POP_FONT)
-	lbl.add_theme_font_size_override("font_size", 56)
+	lbl.add_theme_font_override("font", NUM_FONT)
+	lbl.add_theme_font_size_override("font_size", 76 if gain else 56)
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Palette.OUTLINE)
-	lbl.add_theme_constant_override("outline_size", 8)
+	lbl.add_theme_constant_override("outline_size", 10 if gain else 8)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.custom_minimum_size = Vector2(200.0, 0.0)
+	lbl.custom_minimum_size = Vector2(240.0, 0.0)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	lbl.z_index = 10
+	# Scale around the label's centre so the punch grows from the middle.
+	lbl.pivot_offset = Vector2(120.0, 32.0)
 	var center := seat.global_position + Vector2(seat.size.x * 0.5, seat.avatar_size * 0.5)
-	lbl.position = center - Vector2(100.0, 36.0)
+	lbl.position = center - Vector2(120.0, 36.0)
+	lbl.scale = Vector2(0.2, 0.2)
 	add_child(lbl)
+	_pops.append(lbl)
+
+	var over := 1.18 if gain else 1.0   # winner overshoots harder
 	var tw := create_tween()
-	tw.set_parallel(true)
-	tw.tween_property(lbl, "position:y", lbl.position.y - 90.0, 1.3) \
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(lbl, "modulate:a", 0.0, 1.3).set_ease(Tween.EASE_IN)
-	tw.finished.connect(lbl.queue_free)
+	# Punch in: snap up past full size with a springy back-ease, then settle. No
+	# drift, no fade — the label just stays put for the whole win moment and is
+	# removed on the next deal, so it lives exactly as long as the revealed cards.
+	tw.tween_property(lbl, "scale", Vector2.ONE * over, 0.28) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(lbl, "scale", Vector2.ONE, 0.16) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+## Ease the win moment away: fade the revealed opponent hands and the +/- amount
+## pops out together, then free them, just before the next deal arrives.
+func _fade_out_win() -> void:
+	var nodes: Array = []
+	nodes.append_array(_revealed)
+	nodes.append_array(_pops)
+	_revealed.clear()
+	_pops.clear()
+	for n in nodes:
+		if is_instance_valid(n):
+			var tw := create_tween()
+			tw.tween_property(n, "modulate:a", 0.0, WIN_FADE).set_ease(Tween.EASE_IN)
+			tw.finished.connect(n.queue_free)
+	await get_tree().create_timer(WIN_FADE).timeout
+
+## Drop the floating +/- amount labels (called on the next deal).
+func _clear_pops() -> void:
+	for lbl in _pops:
+		if is_instance_valid(lbl):
+			lbl.queue_free()
+	_pops.clear()
 
 # --- responsive layout ----------------------------------------------------
 
@@ -438,11 +517,32 @@ func _relayout() -> void:
 	($Background as TextureRect).expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	($Vignette as TextureRect).expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 
+	# Push the top row below the device's safe area so a punch-hole / notch camera
+	# can't clip the top seat's border. `safe` is in screen pixels, so convert to
+	# canvas units by the active stretch scale (height px -> design units).
+	# Only modern (taller-than-16:9) phones get a top inset; old 16:9 phones stay
+	# exactly as before. With `expand`, `h / w` IS the device aspect, so this is a
+	# reliable "is this a notch-era phone?" test. We gate the safe-area read behind
+	# it on purpose: get_display_safe_area() also excludes the STATUS BAR, so on a
+	# 16:9 phone it would report a non-zero top and wrongly push the row down.
+	var top_inset := 0.0
+	const OLD_ASPECT := 16.0 / 9.0
+	if w > 0.0 and (h / w) > OLD_ASPECT + 0.02:
+		# Baseline gap for the camera; let the real cutout win if it's bigger.
+		top_inset = 56.0
+		var win := DisplayServer.window_get_size()
+		if win.y > 0:
+			var safe := DisplayServer.get_display_safe_area()
+			top_inset = maxf(top_inset, clampf(float(safe.position.y) * (h / float(win.y)), 0.0, 120.0))
+
+	# Drop the menu glyph by the same amount so it clears the camera too.
+	_chrome.top_inset = top_inset
+
 	# Opponents: hug the left/right edges and centre the top seat, so a wider
 	# canvas pushes the avatars further apart instead of clustering at 720.
-	_place_seat(_seats[3], 8.0, 156.0)                                  # left
-	_place_seat(_seats[2], w * 0.5 - _seats[2].size.x * 0.5, 88.0)      # top, centred
-	_place_seat(_seats[1], w - 8.0 - _seats[1].size.x, 156.0)          # right
+	_place_seat(_seats[3], 8.0, 156.0 + top_inset)                          # left
+	_place_seat(_seats[2], w * 0.5 - _seats[2].size.x * 0.5, 88.0 + top_inset)  # top, centred
+	_place_seat(_seats[1], w - 8.0 - _seats[1].size.x, 156.0 + top_inset)  # right
 
 	# Extra vertical room (tall phones): ease the player's avatar + hand down a
 	# little so the bottom zone isn't stranded high. Buttons stay pinned to the
@@ -450,8 +550,8 @@ func _relayout() -> void:
 	var drop := clampf((h - 1280.0) * 0.15, 0.0, 40.0)
 	_seats[0].offset_top = -500.0 + drop
 	_seats[0].offset_bottom = -288.0 + drop
-	_hand.offset_top = -270.0 + minf(drop, 12.0)
-	_hand.offset_bottom = -130.0 + minf(drop, 12.0)
+	_hand.offset_top = -305.0 + minf(drop, 12.0)
+	_hand.offset_bottom = -165.0 + minf(drop, 12.0)
 
 	# Buttons: keep them centred as a pair on the real width.
 	var bw := 322.0
@@ -511,8 +611,8 @@ func _fade_out_pile() -> void:
 		c.z_index = 4
 		var tw := create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(c, "position:y", gp.y + 36.0, 0.28).set_ease(Tween.EASE_IN)
-		tw.tween_property(c, "modulate:a", 0.0, 0.28)
+		tw.tween_property(c, "position:y", gp.y + 36.0, PILE_FADE).set_ease(Tween.EASE_IN)
+		tw.tween_property(c, "modulate:a", 0.0, PILE_FADE)
 		tw.finished.connect(c.queue_free)
 
 ## Local x offsets for `n` overlapping cards on the table, centred on the canvas.
@@ -559,12 +659,43 @@ func _origin_for(player: int) -> Vector2:
 	var seat: Seat = _seats[player]
 	return seat.global_position + Vector2(seat.size.x * 0.5, seat.avatar_size * 0.5)
 
-func _make_card(row: int, col: int) -> Card:
+func _make_card(row: int, col: int, width: float = HAND_W) -> Card:
 	var c := CardScene.instantiate() as Card
-	c.card_width = int(HAND_W)
+	c.card_width = int(width)
 	c.row = row
 	c.col = col
 	return c
+
+## At match end, lay each opponent's remaining hand face-up as a small vertical
+## stack under their avatar, so you can see what they were holding. Cleared on the
+## next deal. (Seat 0 is the human, whose own fan already shows their cards.)
+func _reveal_opponent_hands(data: GameStateData) -> void:
+	_clear_revealed()
+	for p in [1, 2, 3]:
+		var hand: Array = (data.hands[p] as Array).duplicate()
+		if hand.is_empty():
+			continue
+		hand.sort_custom(func(a: Array, b: Array) -> bool: return _rank(a[1]) < _rank(b[1]))
+		var seat: Seat = _seats[p]
+		var cx := seat.global_position.x + seat.size.x * 0.5 - REVEAL_W * 0.5
+		var top := seat.global_position.y + seat.size.y + 6.0
+		for i in hand.size():
+			var c := _make_card(hand[i][0], hand[i][1], REVEAL_W)
+			c.position = Vector2(cx, top + i * REVEAL_STEP)
+			c.z_index = 6
+			c.modulate.a = 0.0
+			add_child(c)
+			_revealed.append(c)
+			# Stagger a quick fade-in so the stack "deals" open.
+			var tw := create_tween()
+			tw.tween_interval(i * 0.04)
+			tw.tween_property(c, "modulate:a", 1.0, 0.2)
+
+func _clear_revealed() -> void:
+	for c in _revealed:
+		if is_instance_valid(c):
+			c.queue_free()
+	_revealed.clear()
 
 ## Sâm Lốc rank order (3<4<…<K<A<2). Sheet cols: 0=A, 1=2, 2=3 … 12=K.
 func _rank(col: int) -> int:
@@ -703,7 +834,7 @@ func _restore_action_buttons() -> void:
 
 func _editor_preview() -> void:
 	var counts := {0: 10, 1: 9, 2: 9, 3: 1}
-	var money := {0: 1000, 1: 1230, 2: 970, 3: 1000}
+	var money := {0: 8080, 1: 8080, 2: 8080, 3: 8080}
 	for p in _seats:
 		_seats[p].card_count = counts[p]
 		_seats[p].balance = money[p]

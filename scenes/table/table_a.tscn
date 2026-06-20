@@ -79,6 +79,7 @@ offset_right = 152.0
 offset_bottom = 288.0
 mouse_filter = 2
 card_count = 1
+avatar_size = 96.0
 
 [node name="SeatVayne" parent="." unique_id=1774718238 instance=ExtResource("3_seat")]
 custom_minimum_size = Vector2(102, 184)
@@ -91,7 +92,8 @@ offset_bottom = 220.0
 mouse_filter = 2
 hero_name = "VAYNE"
 card_count = 9
-balance = 970
+avatar_size = 96.0
+balance = 8080
 
 [node name="SeatGrimwald" parent="." unique_id=999536191 instance=ExtResource("3_seat")]
 custom_minimum_size = Vector2(147, 184)
@@ -104,7 +106,8 @@ offset_bottom = 288.0
 mouse_filter = 2
 hero_name = "GRIMWALD"
 card_count = 9
-balance = 1230
+avatar_size = 96.0
+balance = 8080
 
 [node name="LastPlayedCards" type="Control" parent="." unique_id=766567226]
 layout_mode = 1
@@ -133,6 +136,7 @@ mouse_filter = 2
 hero_name = "YOU"
 active = true
 turn_progress = 0.7
+avatar_size = 96.0
 
 [node name="Hand" type="Control" parent="." unique_id=1976320608]
 layout_mode = 1
@@ -158,6 +162,7 @@ offset_bottom = -10.0
 grow_vertical = 0
 text = "PASS"
 variant = 1
+font_size = 36
 
 [node name="PlayButton" parent="." unique_id=960728761 instance=ExtResource("4_btn")]
 layout_mode = 1
@@ -169,3 +174,4 @@ offset_top = -108.0
 offset_right = 692.0
 offset_bottom = -10.0
 grow_vertical = 0
+font_size = 36
