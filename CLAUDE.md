@@ -27,6 +27,34 @@ make that migration painless:
   layer can later replace the local one without touching the UI.
 - Don't scatter scoring/validation across scene scripts — it must be portable as one unit.
 
+### Code map (where things live)
+- `rules/sam_loc_rules.gd` — **the engine**. Pure static `SamLocRules` (RefCounted):
+  `deal / classify / is_valid / beats / apply / settle`. `(state, action) -> {ok, state,
+  reason}`. Also holds an **offline-only reference bot** (`find_play`) — a heuristic, NOT
+  authoritative rules; the future server drives real players instead.
+- `rules/game_state_data.gd` — `GameStateData` (RefCounted): plain serialisable match state
+  (`hands, current, table, table_owner, passed, finished, winner`) + `clone()`. No behaviour.
+- `rules/deck.gd` — `Deck`: pure shuffled-deck helper.
+- `autoload/game_state.gd` — `GameState` autoload: the single runtime path. Holds the live
+  `GameStateData`, routes every action through `SamLocRules.apply`, emits signals
+  (`dealt / played / passed / rejected / match_ended`). **Contains no game logic** — when the
+  server arrives, only this file changes (apply locally → send over WebSocket → apply reply).
+- `scenes/table/table_a.gd` — the playable table: presentation + input plumbing only. Renders
+  state, reports taps, animates deal/play/win, runs bots on timers.
+
+### Game rules (current build)
+- **Card encoding:** a card is `[row, col]` into `Cards.png`. Rows 0–3 = suits (suits never
+  affect ranking in this build); cols `0=A, 1=2, 2=3 … 12=K`.
+- **Single-rank order:** `3 (low) … 10, J, Q, K, A, 2 (high)`.
+- **Combos:** single, pair, triple, quad, straight (run ≥3). A response must match the
+  table combo's TYPE and SIZE and outrank its key. **Chops:** a QUAD beats a single 2
+  (1 quad > 1 two); a DOUBLE QUAD (two quads) beats a pair of 2s (2 quads > 2 twos).
+- **Straights** run `A,2,3,…,10,J,Q,K,A` — may start on an ace or a deuce, end no higher than
+  an ace, no wrap past the ace.
+- **Trick / fold:** pass or timeout folds you for the rest of the trick (locked out until a
+  new trick is led). Timeout == auto-pass. The previous match's winner leads the next deal.
+- **Scoring:** winner +30, each loser −10.
+
 ## Repo conventions
 - Same Godot **4.6** on every machine (Ubuntu + Mac). `.godot/` is gitignored
   (regenerated cache); commit `.tscn`, `.gd`, `.tres`, source assets, and `*.import`
@@ -35,6 +63,17 @@ make that migration painless:
 - Scenes are `.tscn`; reusable pieces (card, seat, button) are their own scenes.
 - Keep `.gd` scripts limited to rendering + input plumbing; rules live in the standalone
   rules module, not in node scripts.
+- **Player-facing copy is Vietnamese** (`ĐÁNH` / `BỎ LƯỢT`, `LƯỢT CỦA BẠN`, `… THẮNG`, etc.).
+  DearPix covers the diacritics. Keep engine reasons in English; translate them in the UI
+  layer (see `WARN_VI` in `table_a.gd`).
+- **Responsive layout:** stretch is `canvas_items` + `expand`, so the canvas is 720 wide on
+  phones but grows (toward ~960) on squarer tablets and taller on thin phones. In layout
+  code read the **live** size (`size.x` / `_vw()`), never hardcode 720; the felt/vignette
+  must fill the real viewport. `_relayout()` (re-run on `resized`) spreads the seats and
+  eases the player zone — keep it idempotent.
+- **The Godot editor re-saves open `.tscn` files and will revert your file edits to them.**
+  For volatile UI props (button text/size, etc.) set them from code in `_ready` so they
+  survive; only commit `.tscn` changes when the scene isn't open in the editor.
 
 ## Design system (authoritative palette — use exact hex)
 - felt `#7a1226` · table `#6a0f20` · frame `#3d0a14` · outline `#180810` · ember `#ef8b2c`

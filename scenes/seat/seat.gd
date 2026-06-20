@@ -6,7 +6,7 @@ extends Control
 ## One layout for everyone — name below, count badge on the top-right corner.
 ## `active` marks whose turn it is: the avatar bobs and its frame border becomes
 ## a depleting ember ring driven by `turn_progress` (the turn countdown, running
-## out at the top-right). A seat holding one card (`card_count <= 1`) glows red
+## out at the top-right). A seat holding one card (`card_count == 1`) glows red
 ## as a danger marker. Rendering only — no rules, no timing.
 
 const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
@@ -16,7 +16,10 @@ const RADIUS := 18.0
 const BORDER := 6.0
 const BOB_AMP := 10.0       # how high the active avatar hops (px)
 const BOB_PERIOD := 2.2     # seconds per hop
-const PULSE_PERIOD := 1.6   # seconds per danger/aura pulse
+const PULSE_PERIOD := 2.6   # seconds per danger/aura pulse (slow breathe)
+const AURA_ALPHA := Vector2(0.12, 0.32)   # soft glow opacity range
+const AURA_SIZE := Vector2(8.0, 14.0)     # soft glow blur range (px)
+const DANGER_PROGRESS := 0.5   # last 10s of a 20s turn: ring reddens
 
 @export var hero_name: String = "SERAPHINE":
 	set(v):
@@ -51,6 +54,18 @@ const PULSE_PERIOD := 1.6   # seconds per danger/aura pulse
 	set(v):
 		avatar = v
 		queue_redraw()
+## Player money, shown as a coin + amount under the name.
+@export var balance: int = 1000:
+	set(v):
+		balance = v
+		_refresh()
+
+const NAME_SIZE := 34      # readable on an HD phone screen, not tiny pixels
+const BAL_SIZE := 30
+const NAME_H := 42.0
+const BAL_H := 38.0
+const COIN_R := 9.0        # little coin glyph radius
+const COIN_GAP := 8.0      # coin -> number spacing
 
 var _t := 0.0
 
@@ -65,16 +80,21 @@ func _process(delta: float) -> void:
 ## Animate while it's our turn or while we're in danger (the red aura pulses).
 func _update_processing() -> void:
 	if is_node_ready():
-		set_process(active or card_count <= 1)
+		set_process(active or card_count == 1)
 
 func _refresh() -> void:
 	var plate := _plate_size()
 	custom_minimum_size = Vector2(maxf(avatar_size, plate.x), avatar_size + GAP + plate.y)
 	queue_redraw()
 
+## Name line over a coin+balance line; width fits the wider of the two.
 func _plate_size() -> Vector2:
-	var ts := FONT.get_string_size(hero_name, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 24)
-	return Vector2(ts.x + 28.0, 40.0)
+	var nw := FONT.get_string_size(hero_name, HORIZONTAL_ALIGNMENT_LEFT, -1.0, NAME_SIZE).x
+	var bw := COIN_R * 2.0 + COIN_GAP + _bal_text_width()
+	return Vector2(maxf(nw, bw) + 28.0, NAME_H + BAL_H)
+
+func _bal_text_width() -> float:
+	return FONT.get_string_size(_commas(balance), HORIZONTAL_ALIGNMENT_LEFT, -1.0, BAL_SIZE).x
 
 func _draw() -> void:
 	var bob := 0.0
@@ -97,8 +117,8 @@ func _draw_avatar(av: Rect2) -> void:
 	if active:
 		# Soft ember glow while it's our turn.
 		var pulse := 0.5 + 0.5 * sin(_t * TAU / PULSE_PERIOD)
-		outline.shadow_color = Color(Palette.EMBER, lerpf(0.25, 0.6, pulse))
-		outline.shadow_size = int(lerpf(10.0, 20.0, pulse))
+		outline.shadow_color = Color(Palette.EMBER, lerpf(AURA_ALPHA.x, AURA_ALPHA.y, pulse))
+		outline.shadow_size = int(lerpf(AURA_SIZE.x, AURA_SIZE.y, pulse))
 	draw_style_box(outline, av.grow(3.0))
 
 	var frame := StyleBoxFlat.new()
@@ -106,8 +126,9 @@ func _draw_avatar(av: Rect2) -> void:
 	frame.bg_color = Palette.FRAME
 	frame.set_corner_radius_all(int(RADIUS))
 	frame.set_border_width_all(int(BORDER))
-	# Base border colour; the active ember ring is drawn on top as a depleting arc.
-	frame.border_color = Palette.BEVEL_HI
+	# When active, the border is a dark track so the orange ember timer drawn on
+	# top of it stands out clearly (spent = dark, remaining = bright ember).
+	frame.border_color = Palette.OUTLINE if active else Palette.BEVEL_HI
 	draw_style_box(frame, av)
 
 	if avatar:
@@ -123,11 +144,29 @@ func _draw_turn_ring(av: Rect2) -> void:
 		return
 	# Trace along the border centre-line so the ring sits on the frame edge.
 	var inset := BORDER * 0.5
-	var pts := _rr_points(av.grow(-inset), RADIUS - inset, 6)
+	var pts := _rr_points(av.grow(-inset), RADIUS - inset, 8)
 	var n := pts.size()
-	var k := int(round(turn_progress * (n - 1)))
-	if k >= 1:
-		draw_polyline(pts.slice(0, k + 1), Palette.EMBER, BORDER, false)
+	# Walk the perimeter by ARC LENGTH (not point index) so the ember end moves
+	# at constant speed; interpolate the final segment for continuous motion.
+	var total := 0.0
+	for i in n - 1:
+		total += pts[i].distance_to(pts[i + 1])
+	var want := turn_progress * total
+	var out := PackedVector2Array([pts[0]])
+	var acc := 0.0
+	for i in n - 1:
+		var d := pts[i].distance_to(pts[i + 1])
+		if acc + d <= want:
+			out.append(pts[i + 1])
+			acc += d
+		else:
+			var t := (want - acc) / d if d > 0.0 else 0.0
+			out.append(pts[i].lerp(pts[i + 1], t))
+			break
+	if out.size() >= 2:
+		# Last 10s of a 20s turn (progress <= 0.5): ring snaps to red.
+		var col := Palette.BADGE_RED if turn_progress < DANGER_PROGRESS else Palette.EMBER
+		draw_polyline(out, col, BORDER, false)
 
 ## Points tracing a rounded rect clockwise, starting at the top edge's right end
 ## (the top-right corner). `seg` = arc subdivisions per corner.
@@ -157,21 +196,49 @@ func _arc(pts: PackedVector2Array, center: Vector2, rad: float, a0: float, a1: f
 
 func _draw_badge(av: Rect2) -> void:
 	# Centred on the avatar's top-right corner so it sits half outside the frame.
-	var danger := card_count <= 1
+	var danger := card_count == 1
 	var bc := av.position + Vector2(av.size.x, 0.0)
 	var fill := Palette.BADGE_RED if danger else Palette.COIN
 	var ink := Palette.GOLD_HI if danger else Color("241208")
 	if danger:
-		# Pulsing red aura around the badge.
+		# Soft pulsing red aura — same blurred glow as the turn aura.
 		var pulse := 0.5 + 0.5 * sin(_t * TAU / PULSE_PERIOD)
-		draw_circle(bc, BADGE * 0.5 + lerpf(8.0, 16.0, pulse), Color(Palette.BADGE_RED, lerpf(0.15, 0.35, pulse)))
+		var glow := StyleBoxFlat.new()
+		glow.anti_aliasing = false
+		glow.bg_color = Color(Palette.BADGE_RED, 0.0)   # invisible box; only its shadow shows
+		glow.set_corner_radius_all(int(BADGE * 0.5))
+		glow.shadow_color = Color(Palette.BADGE_RED, lerpf(AURA_ALPHA.x, AURA_ALPHA.y, pulse))
+		glow.shadow_size = int(lerpf(AURA_SIZE.x, AURA_SIZE.y, pulse))
+		draw_style_box(glow, Rect2(bc - Vector2(BADGE, BADGE) * 0.5, Vector2(BADGE, BADGE)))
 	draw_circle(bc, BADGE * 0.5 + 4.0, Palette.OUTLINE)
 	draw_circle(bc, BADGE * 0.5, fill)
 	PixelDraw.text_centered(self, Rect2(bc - Vector2(BADGE, BADGE) * 0.5, Vector2(BADGE, BADGE)),
-			FONT, 26, str(card_count), ink)
+			FONT, 30, str(card_count), ink)
 
-func _draw_plate(av: Rect2) -> void:
-	var plate := _plate_size()
-	# Name below the avatar — text only, no box.
-	var pr := Rect2(Vector2((size.x - plate.x) * 0.5, avatar_size + GAP), plate)
-	PixelDraw.text_centered(self, pr, FONT, 24, hero_name, Palette.GOLD_HI)
+func _draw_plate(_av: Rect2) -> void:
+	var top := avatar_size + GAP
+	# Name line — gold-hi, centred under the avatar.
+	PixelDraw.text_centered(self, Rect2(0.0, top, size.x, NAME_H),
+			FONT, NAME_SIZE, hero_name, Palette.GOLD_HI)
+	# Balance line — a small coin glyph + amount, centred as a group below.
+	var bal := _commas(balance)
+	var group := COIN_R * 2.0 + COIN_GAP + _bal_text_width()
+	var bx := (size.x - group) * 0.5
+	var by := top + NAME_H
+	var cc := Vector2(bx + COIN_R, by + BAL_H * 0.5)
+	draw_circle(cc, COIN_R + 1.0, Palette.OUTLINE)
+	draw_circle(cc, COIN_R, Palette.COIN)
+	draw_circle(cc, COIN_R * 0.4, Color("574014"))
+	PixelDraw.text_centered(self, Rect2(bx + COIN_R * 2.0 + COIN_GAP, by, _bal_text_width(), BAL_H),
+			FONT, BAL_SIZE, bal, Palette.GOLD)
+
+func _commas(n: int) -> String:
+	var s := str(absi(n))
+	var out := ""
+	var c := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		c += 1
+		if c % 3 == 0 and i > 0:
+			out = "," + out
+	return ("-" + out) if n < 0 else out

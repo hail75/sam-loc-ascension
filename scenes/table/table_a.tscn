@@ -1,7 +1,7 @@
-[gd_scene load_steps=9 format=3 uid="uid://c0samloctablea1"]
+[gd_scene format=3 uid="uid://dba7rw862dxeg"]
 
-[ext_resource type="Script" path="res://scenes/table/table_a.gd" id="1_table"]
-[ext_resource type="Script" path="res://scenes/table/table_chrome.gd" id="2_chrome"]
+[ext_resource type="Script" uid="uid://4eq7l78khnw5" path="res://scenes/table/table_a.gd" id="1_table"]
+[ext_resource type="Script" uid="uid://yfifva05mlsg" path="res://scenes/table/table_chrome.gd" id="2_chrome"]
 [ext_resource type="PackedScene" uid="uid://dba7rw8b1mk4g" path="res://scenes/seat/seat.tscn" id="3_seat"]
 [ext_resource type="PackedScene" uid="uid://dba7rwqsll8rg" path="res://scenes/ui/pixel_button.tscn" id="4_btn"]
 
@@ -29,7 +29,7 @@ fill = 1
 fill_from = Vector2(0.5, 0.42)
 fill_to = Vector2(1, 1)
 
-[node name="TableA" type="Control"]
+[node name="TableA" type="Control" unique_id=1319960267]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -38,7 +38,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_table")
 
-[node name="Background" type="TextureRect" parent="."]
+[node name="Background" type="TextureRect" parent="." unique_id=699775755]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -48,7 +48,7 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("Tex_bg")
 
-[node name="Vignette" type="TextureRect" parent="."]
+[node name="Vignette" type="TextureRect" parent="." unique_id=560212089]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -58,7 +58,7 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("Tex_vig")
 
-[node name="Chrome" type="Control" parent="."]
+[node name="Chrome" type="Control" parent="." unique_id=1011709613]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -67,8 +67,10 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("2_chrome")
+banner_text = "YOUR TURN"
 
-[node name="SeatSeraphine" parent="." instance=ExtResource("3_seat")]
+[node name="SeatSeraphine" parent="." unique_id=1921091373 instance=ExtResource("3_seat")]
+custom_minimum_size = Vector2(158, 184)
 layout_mode = 1
 anchors_preset = 0
 offset_left = 8.0
@@ -76,10 +78,10 @@ offset_top = 156.0
 offset_right = 152.0
 offset_bottom = 288.0
 mouse_filter = 2
-hero_name = "SERAPHINE"
 card_count = 1
 
-[node name="SeatVayne" parent="." instance=ExtResource("3_seat")]
+[node name="SeatVayne" parent="." unique_id=1774718238 instance=ExtResource("3_seat")]
+custom_minimum_size = Vector2(102, 184)
 layout_mode = 1
 anchors_preset = 0
 offset_left = 288.0
@@ -89,8 +91,10 @@ offset_bottom = 220.0
 mouse_filter = 2
 hero_name = "VAYNE"
 card_count = 9
+balance = 970
 
-[node name="SeatGrimwald" parent="." instance=ExtResource("3_seat")]
+[node name="SeatGrimwald" parent="." unique_id=999536191 instance=ExtResource("3_seat")]
+custom_minimum_size = Vector2(147, 184)
 layout_mode = 1
 anchors_preset = 0
 offset_left = 568.0
@@ -99,10 +103,12 @@ offset_right = 712.0
 offset_bottom = 288.0
 mouse_filter = 2
 hero_name = "GRIMWALD"
-card_count = 6
+card_count = 9
+balance = 1230
 
-[node name="LastPlayedCards" type="Control" parent="."]
+[node name="LastPlayedCards" type="Control" parent="." unique_id=766567226]
 layout_mode = 1
+anchors_preset = 14
 anchor_top = 0.5
 anchor_right = 1.0
 anchor_bottom = 0.5
@@ -112,23 +118,25 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="SeatYou" parent="." instance=ExtResource("3_seat")]
+[node name="SeatYou" parent="." unique_id=1089704089 instance=ExtResource("3_seat")]
+custom_minimum_size = Vector2(108, 184)
 layout_mode = 1
+anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 24.0
-offset_top = -468.0
+offset_top = -500.0
 offset_right = 184.0
 offset_bottom = -288.0
 grow_vertical = 0
 mouse_filter = 2
 hero_name = "YOU"
-card_count = 10
 active = true
 turn_progress = 0.7
 
-[node name="Hand" type="Control" parent="."]
+[node name="Hand" type="Control" parent="." unique_id=1976320608]
 layout_mode = 1
+anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -138,8 +146,9 @@ grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
 
-[node name="PlayButton" parent="." instance=ExtResource("4_btn")]
+[node name="PassButton" parent="." unique_id=1921631530 instance=ExtResource("4_btn")]
 layout_mode = 1
+anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 28.0
@@ -147,11 +156,12 @@ offset_top = -108.0
 offset_right = 350.0
 offset_bottom = -10.0
 grow_vertical = 0
-text = "PLAY"
-variant = 0
+text = "PASS"
+variant = 1
 
-[node name="PassButton" parent="." instance=ExtResource("4_btn")]
+[node name="PlayButton" parent="." unique_id=960728761 instance=ExtResource("4_btn")]
 layout_mode = 1
+anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 370.0
@@ -159,5 +169,3 @@ offset_top = -108.0
 offset_right = 692.0
 offset_bottom = -10.0
 grow_vertical = 0
-text = "PASS"
-variant = 1
