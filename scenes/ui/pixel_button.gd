@@ -12,6 +12,8 @@ enum Variant { GOLD, CRIMSON, DISABLED }
 
 const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
 const DROP := 10.0  # hard drop-shadow depth; also the press travel
+const ROUND := 16.0  # crisp pixel corner radius
+const ROUND_STEP := 4.0  # size of each corner stair
 
 @export var text: String = "PLAY":
 	set(v):
@@ -71,7 +73,8 @@ func _draw() -> void:
 
 	# Hard drop shadow (hidden while pressed / disabled).
 	if not _pressed and not off:
-		draw_rect(Rect2(Vector2(0.0, DROP), face_size), Palette.OUTLINE)
+		PixelDraw.pixel_round_rect(self, Rect2(Vector2(0.0, DROP), face_size),
+			Palette.OUTLINE, ROUND, ROUND_STEP)
 
 	var face_y := DROP if _pressed else 0.0
 	var face := Rect2(Vector2(0.0, face_y), face_size)
@@ -95,12 +98,14 @@ func _draw() -> void:
 
 	if off:
 		# single muted border, no bevel
-		draw_rect(Rect2(face.position - Vector2(4, 4), face.size + Vector2(8, 8)), Palette.OUTLINE)
-		draw_rect(face, fill)
-		draw_rect(Rect2(face.position, Vector2(face.size.x, 6)), fill.darkened(0.3))
-		draw_rect(Rect2(face.position, Vector2(6, face.size.y)), fill.darkened(0.3))
+		PixelDraw.pixel_round_rect(self, Rect2(face.position - Vector2(4, 4), face.size + Vector2(8, 8)),
+			Palette.OUTLINE, ROUND + 4.0, ROUND_STEP)
+		PixelDraw.pixel_round_rect(self, face, fill, ROUND, ROUND_STEP)
+		draw_rect(Rect2(face.position + Vector2(ROUND, 0.0), Vector2(face.size.x - ROUND * 2.0, 6)), fill.darkened(0.3))
+		draw_rect(Rect2(face.position + Vector2(0.0, ROUND), Vector2(6, face.size.y - ROUND * 2.0)), fill.darkened(0.3))
 	else:
-		PixelDraw.beveled(self, face, fill, Palette.BEVEL_HI, Palette.BEVEL_LO, Palette.OUTLINE)
+		PixelDraw.beveled_round(self, face, fill, Palette.BEVEL_HI, Palette.BEVEL_LO,
+			Palette.OUTLINE, 6.0, 4.0, ROUND, ROUND_STEP)
 
 	_draw_label(face, ink)
 

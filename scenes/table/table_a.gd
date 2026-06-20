@@ -544,14 +544,13 @@ func _relayout() -> void:
 	_place_seat(_seats[2], w * 0.5 - _seats[2].size.x * 0.5, 88.0 + top_inset)  # top, centred
 	_place_seat(_seats[1], w - 8.0 - _seats[1].size.x, 156.0 + top_inset)  # right
 
-	# Extra vertical room (tall phones): ease the player's avatar + hand down a
-	# little so the bottom zone isn't stranded high. Buttons stay pinned to the
-	# bottom edge. Capped so the hand never collides with the buttons.
-	var drop := clampf((h - 1280.0) * 0.15, 0.0, 40.0)
-	_seats[0].offset_top = -500.0 + drop
-	_seats[0].offset_bottom = -288.0 + drop
-	_hand.offset_top = -305.0 + minf(drop, 12.0)
-	_hand.offset_bottom = -165.0 + minf(drop, 12.0)
+	# Tall phones (aspect > 16:9): only the three opponent avatars drop (via
+	# top_inset above) to clear the camera. The player's own avatar + hand stay
+	# pinned to the bottom — they're bottom-anchored, so they never move.
+	_seats[0].offset_top = -500.0
+	_seats[0].offset_bottom = -288.0
+	_hand.offset_top = -305.0
+	_hand.offset_bottom = -165.0
 
 	# Buttons: keep them centred as a pair on the real width.
 	var bw := 322.0
