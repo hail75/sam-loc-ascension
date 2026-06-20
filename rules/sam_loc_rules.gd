@@ -18,6 +18,8 @@ const NUM_PLAYERS := 4
 const HAND_SIZE := 10
 const WIN_REWARD := 30
 const LOSS_PENALTY := 10
+## Báo sâm stakes: the declarer takes (or pays) this much PER opponent.
+const BAO_SAM_STAKE := 20
 
 ## Combo kinds. Order/values are internal; compare only within the same kind.
 enum Combo { INVALID, SINGLE, PAIR, TRIPLE, QUAD, STRAIGHT, DOUBLE_QUAD }
@@ -32,11 +34,22 @@ static func rank(card: Array) -> int:
 		return 13  # Two — highest single
 	return col - 1
 
-## Per-player balance change for a finished match: winner gains, losers pay.
-static func settle(winner: int) -> Array:
+## Per-player balance change for a finished match.
+##  * Báo sâm declared: the declarer wins/pays the stake against EACH opponent
+##    (+20 each on success, -20 each on failure); opponents take the other side.
+##  * Otherwise: the winner gains, the losers each pay.
+static func settle(state: GameStateData) -> Array:
 	var deltas: Array = []
+	if state.bao_sam != -1:
+		var success := not state.bao_sam_failed
+		for p in NUM_PLAYERS:
+			if p == state.bao_sam:
+				deltas.append(BAO_SAM_STAKE * (NUM_PLAYERS - 1) * (1 if success else -1))
+			else:
+				deltas.append(BAO_SAM_STAKE * (-1 if success else 1))
+		return deltas
 	for p in NUM_PLAYERS:
-		deltas.append(WIN_REWARD if p == winner else -LOSS_PENALTY)
+		deltas.append(WIN_REWARD if p == state.winner else -LOSS_PENALTY)
 	return deltas
 
 ## Deal a fresh match: 10 cards each. `first` leads (the previous match's winner;
@@ -154,6 +167,10 @@ static func apply(state: GameStateData, action: Dictionary) -> Dictionary:
 	if state.finished:
 		return _fail(state, "match over")
 	var p: int = action.get("player", -1)
+	# Declaring báo sâm happens before the normal turn order kicks in, so it is
+	# allowed off-turn (any player may grab the open right pre-play).
+	if action.get("type", "") == "declare":
+		return _declare(state, p)
 	if p != state.current:
 		return _fail(state, "not your turn")
 	if state.passed[p]:
@@ -166,6 +183,21 @@ static func apply(state: GameStateData, action: Dictionary) -> Dictionary:
 			return _pass(state, p)
 		_:
 			return _fail(state, "unknown action")
+
+## Claim the báo sâm: `p` declares, takes the open right, and leads at once.
+## Only valid before any card has been played this deal.
+static func _declare(state: GameStateData, p: int) -> Dictionary:
+	if state.bao_sam != -1:
+		return _fail(state, "báo sâm already declared")
+	if not state.table.is_empty():
+		return _fail(state, "too late to báo sâm")
+	var ns := state.clone()
+	ns.bao_sam = p
+	ns.current = p
+	ns.table_owner = -1
+	for q in NUM_PLAYERS:
+		ns.passed[q] = false
+	return {"ok": true, "state": ns, "reason": ""}
 
 static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 	if not is_valid(cards):
@@ -182,6 +214,13 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 		hand.remove_at(idx)
 	ns.table = cards.duplicate(true)
 	ns.table_owner = p
+	# Báo sâm: anyone other than the declarer landing a play means the declarer's
+	# lead was beaten — the declaration is broken and the deal ends in failure.
+	if ns.bao_sam != -1 and p != ns.bao_sam:
+		ns.bao_sam_failed = true
+		ns.finished = true
+		ns.winner = p
+		return {"ok": true, "state": ns, "reason": ""}
 	if hand.is_empty():
 		ns.finished = true
 		ns.winner = p
@@ -197,6 +236,13 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 
 static func _pass(state: GameStateData, p: int) -> Dictionary:
 	var ns := state.clone()
+	# A báo sâm declarer only ever acts on their own (empty) lead; passing there
+	# means abandoning the open right — the declaration fails immediately.
+	if ns.bao_sam == p and ns.table.is_empty():
+		ns.bao_sam_failed = true
+		ns.finished = true
+		ns.winner = _next_active(ns, p)
+		return {"ok": true, "state": ns, "reason": ""}
 	ns.passed[p] = true
 	# A trick is in progress and only its owner is left standing: they take it
 	# and lead a fresh trick (everyone folds back in).

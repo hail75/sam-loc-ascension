@@ -8,6 +8,7 @@ extends Node
 signal dealt(data: GameStateData)
 signal played(player: int, cards: Array, data: GameStateData)
 signal passed(player: int, data: GameStateData)
+signal declared(player: int, data: GameStateData)
 signal rejected(reason: String)
 signal match_ended(winner: int, deltas: Array, balances: Array, data: GameStateData)
 
@@ -34,6 +35,10 @@ func play(player: int, cards: Array) -> bool:
 func pass_turn(player: int) -> bool:
 	return _commit({"type": "pass", "player": player})
 
+## Declare báo sâm: `player` grabs the open right for this deal.
+func declare_bao_sam(player: int) -> bool:
+	return _commit({"type": "declare", "player": player})
+
 func _commit(action: Dictionary) -> bool:
 	var r := SamLocRules.apply(data, action)
 	if not r.ok:
@@ -41,13 +46,16 @@ func _commit(action: Dictionary) -> bool:
 		return false
 	data = r.state
 	var p: int = action["player"]
-	if action["type"] == "play":
-		played.emit(p, action["cards"], data)
-	else:
-		passed.emit(p, data)
+	match action["type"]:
+		"play":
+			played.emit(p, action["cards"], data)
+		"declare":
+			declared.emit(p, data)
+		_:
+			passed.emit(p, data)
 	if data.finished:
 		_last_winner = data.winner
-		var deltas := SamLocRules.settle(data.winner)
+		var deltas := SamLocRules.settle(data)
 		for i in deltas.size():
 			balances[i] += deltas[i]
 		match_ended.emit(data.winner, deltas, balances, data)

@@ -53,7 +53,13 @@ make that migration painless:
   an ace, no wrap past the ace.
 - **Trick / fold:** pass or timeout folds you for the rest of the trick (locked out until a
   new trick is led). Timeout == auto-pass. The previous match's winner leads the next deal.
-- **Scoring:** winner +30, each loser −10.
+- **Báo sâm (the namesake ritual):** before each deal there's a claim window. A player may
+  declare *báo sâm* to grab the open right and lead; they must then win every trick
+  **unblocked** (run the whole hand). Success → +20 from each opponent (+60); failure
+  (their lead gets beaten, or they give up the lead) → −60, +20 to each opponent. Declaring
+  is engine state (`bao_sam`, action `"declare"`, settled in `settle(state)`). **Bots cannot
+  báo sâm yet** — only the human, via the BÁO SÂM button in the pre-game window.
+- **Scoring:** normal deal — winner +30, each loser −10. Báo sâm — see above.
 
 ## Repo conventions
 - Same Godot **4.6** on every machine (Ubuntu + Mac). `.godot/` is gitignored

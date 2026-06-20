@@ -26,7 +26,7 @@ const HAND_MAX_STEP := 66.0
 const LP_OVERLAP := 28.0                   # last-played card overlap
 const SELECT_LIFT := 28.0
 
-const TURN_TIME := 20.0                     # seconds a turn lasts; the seat ring drains over this for everyone
+const TURN_TIME := 20.0                     # seconds a turn (and the báo sâm window) lasts; the seat ring drains over this for everyone
 const BOT_DELAY_MIN := 1.5                  # bots act somewhere inside their turn
 const BOT_DELAY_MAX := 4.0
 const FLY_TIME := 0.32                      # play-to-centre flight
@@ -57,6 +57,8 @@ const POP_GREY := Color("9d978d")     # loser loss (muted)
 var last_played: Array = []        # cards currently resting on the table
 var _selected: Dictionary = {}     # Card -> bool
 var _my_turn := false
+var _bao_window := false            # the báo sâm claim window is open (buttons mean claim/thôi)
+var _bao_passed: Array = []         # during the window: which of the 4 have thôi'd (declined)
 var _gen := 0                      # bumped each deal; cancels stale bot/timeout awaits
 var _turn_tween: Tween
 var _pending_origins: Array = []   # global centres of the cards you just played
@@ -72,7 +74,7 @@ func _ready() -> void:
 	# Godot editor re-saving the scene over our changes.
 	_play_btn.text = "ĐÁNH"
 	_play_btn.font_size = 54
-	_pass_btn.text = "BỎ LƯỢT"
+	_pass_btn.text = "THÔI"
 	_pass_btn.font_size = 54
 	_play_btn.pressed.connect(_on_play)
 	_pass_btn.pressed.connect(_on_pass)
@@ -139,6 +141,10 @@ func _on_dealt(data: GameStateData) -> void:
 		_seats[p].card_count = 0
 		_seats[p].show_badge = false
 		_seats[p].balance = GameState.balances[p]
+	# The action button advertises the upcoming claim while dealing (greyed-out
+	# BÁO SÂM, not ĐÁNH), since the báo sâm window comes before any normal turn.
+	_play_btn.text = "BÁO SÂM"
+	_pass_btn.text = "THÔI"
 	_set_my_turn(false)
 	_chrome.banner_text = "ĐANG CHIA BÀI"
 
@@ -149,7 +155,12 @@ func _on_dealt(data: GameStateData) -> void:
 	for p in _seats:
 		_seats[p].card_count = data.hands[p].size()
 		_seats[p].show_badge = true
-	_start_turn(data)
+	# The "special turn" before play: a window to claim báo sâm. May change the
+	# state (declarer leads), so read GameState.data fresh afterwards.
+	await _bao_sam_window(g)
+	if g != _gen:
+		return
+	_start_turn(GameState.data)
 
 ## Fling card backs from the deck stack to every player, counter-clockwise,
 ## then flip your own hand face-up. Awaitable; bails if `g` goes stale.
@@ -298,7 +309,12 @@ func _start_turn(data: GameStateData) -> void:
 	var seat: Seat = _seats[data.current]
 	seat.active = true
 	seat.turn_progress = 1.0
-	_chrome.banner_text = "LƯỢT CỦA BẠN" if data.current == 0 else ""
+	# During a báo sâm deal the banner stays on the declarer's ritual; otherwise
+	# it's the usual turn prompt.
+	if data.bao_sam != -1:
+		_chrome.banner_text = "%s BÁO SÂM" % _seats[data.bao_sam].hero_name
+	else:
+		_chrome.banner_text = "LƯỢT CỦA BẠN" if data.current == 0 else ""
 
 	if _turn_tween:
 		_turn_tween.kill()
@@ -363,11 +379,15 @@ func _on_match_ended(winner: int, deltas: Array, balances: Array, _data: GameSta
 	_set_my_turn(false)
 	if _turn_tween:
 		_turn_tween.kill()
-	_chrome.banner_text = "%s THẮNG" % _seats[winner].hero_name
+	if _data.bao_sam != -1:
+		var ok := not _data.bao_sam_failed
+		_chrome.banner_text = "%s BÁO SÂM %s" % [_seats[_data.bao_sam].hero_name, "THẮNG" if ok else "THUA"]
+	else:
+		_chrome.banner_text = "%s THẮNG" % _seats[winner].hero_name
 	for p in _seats:
-		var won: bool = p == winner
-		var text := "+%d" % deltas[p] if deltas[p] >= 0 else str(deltas[p])
-		_pop_balance(_seats[p], text, POP_GOLD if won else POP_GREY)
+		var gain: bool = deltas[p] >= 0
+		var text := "+%d" % deltas[p] if gain else str(deltas[p])
+		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY)
 		_seats[p].balance = balances[p]   # tick to the settled amount
 	await get_tree().create_timer(WIN_PAUSE).timeout
 	GameState.new_match()
@@ -566,6 +586,10 @@ func _on_card_input(event: InputEvent, card: Card) -> void:
 		card.z_index = 1 if sel else 0
 
 func _on_play() -> void:
+	# During the báo sâm window the play button means "declare", not "play".
+	if _bao_window:
+		_declare_bao_sam()
+		return
 	if not _my_turn:
 		return
 	# Capture the cards AND the global centre each sits at, so the flight starts
@@ -586,10 +610,94 @@ func _on_play() -> void:
 		_pending_origins = []
 
 func _on_pass() -> void:
+	# During the báo sâm window the pass button means "thôi" (decline the claim).
+	if _bao_window:
+		_bao_thoi(0)
+		_play_btn.disabled = true
+		_pass_btn.disabled = true
+		return
 	if not _my_turn:
 		return
 	_set_my_turn(false)
 	GameState.pass_turn(0)
+
+# --- báo sâm (the pre-game declaration race) ------------------------------
+
+## The "special turn" before play: all four ember timers run at once and anyone
+## may claim báo sâm. Bots can't claim, so they just thôi (decline) on their own
+## clock — their timer reverts to a normal border. The real game begins when the
+## window times out OR all four have thôi'd, unless the human claims first (which
+## starts the game immediately, with their lead). Awaitable.
+func _bao_sam_window(g: int) -> void:
+	_bao_window = true
+	_bao_passed = [false, false, false, false]
+	_chrome.banner_text = "BÁO SÂM?"
+	# Play button = claim, pass button = thôi. (They already read BÁO SÂM / THÔI.)
+	_play_btn.disabled = false
+	_pass_btn.disabled = false
+	# Every seat's timer runs together for the whole window.
+	var rings: Array = []
+	for p in _seats:
+		_seats[p].active = true
+		_seats[p].turn_progress = 1.0
+		var tw := create_tween()
+		tw.tween_property(_seats[p], "turn_progress", 0.0, TURN_TIME)
+		rings.append(tw)
+	# Bots decide (decline) at staggered moments inside the window.
+	for p in [1, 2, 3]:
+		_bao_bot_thoi(p, g)
+	# Run until claimed, everyone thôi'd, or time's up.
+	var elapsed := 0.0
+	while _bao_window and elapsed < TURN_TIME and g == _gen:
+		if _bao_all_passed():
+			break
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
+	for tw in rings:
+		if tw.is_valid():
+			tw.kill()
+	if g != _gen:
+		return
+	for p in _seats:
+		_seats[p].active = false
+	if _bao_window:        # nobody claimed -> fall through to a normal deal
+		_close_bao_window()
+
+## A bot waits a beat, then thôis (it can't báo sâm yet).
+func _bao_bot_thoi(p: int, g: int) -> void:
+	await get_tree().create_timer(randf_range(1.0, TURN_TIME * 0.6)).timeout
+	if g != _gen or not _bao_window:
+		return
+	_bao_thoi(p)
+
+## Mark `p` as having declined: their ember timer reverts to a normal border.
+func _bao_thoi(p: int) -> void:
+	if _bao_passed.is_empty() or _bao_passed[p]:
+		return
+	_bao_passed[p] = true
+	_seats[p].active = false
+
+func _bao_all_passed() -> bool:
+	for v in _bao_passed:
+		if not v:
+			return false
+	return true
+
+## Player claimed báo sâm: declare through the engine, then hand them the lead.
+func _declare_bao_sam() -> void:
+	_bao_window = false
+	GameState.declare_bao_sam(0)
+	_restore_action_buttons()
+
+## No claim — fall through to a normal deal.
+func _close_bao_window() -> void:
+	_bao_window = false
+	_restore_action_buttons()
+
+func _restore_action_buttons() -> void:
+	_play_btn.text = "ĐÁNH"
+	_pass_btn.text = "THÔI"
+	_set_my_turn(false)   # _start_turn re-enables them for whoever leads
 
 # --- editor preview (no GameState in the editor) --------------------------
 

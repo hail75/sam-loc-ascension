@@ -11,6 +11,10 @@ var table: Array = []        # the current top play, as [row, col] cards
 var table_owner: int = -1    # who owns the cards on the table (-1 = fresh lead)
 var passed: Array = []       # NUM_PLAYERS bools: who has folded THIS trick and
                              # is locked out until the next trick starts
+var bao_sam: int = -1        # player who declared "báo sâm" this deal (-1 = none).
+                             # They lead and must win every trick unblocked.
+var bao_sam_failed: bool = false  # set if the declaration was broken (declarer's
+                                  # lead got beaten, or they gave up the lead)
 var finished: bool = false
 var winner: int = -1
 
@@ -23,6 +27,8 @@ func clone() -> GameStateData:
 	s.table = table.duplicate(true)
 	s.table_owner = table_owner
 	s.passed = passed.duplicate()
+	s.bao_sam = bao_sam
+	s.bao_sam_failed = bao_sam_failed
 	s.finished = finished
 	s.winner = winner
 	return s
