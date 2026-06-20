@@ -95,14 +95,18 @@ func _draw() -> void:
 		# Grey out the button's OWN colour: desaturate + dim, keep the hue.
 		fill = _greyed(fill)
 		ink = _greyed(ink)
+	elif _pressed:
+		# Light up while the finger is held down (before release).
+		fill = fill.lightened(0.18)
 
 	if off:
-		# single muted border, no bevel
+		# single muted border, no bevel — layered as nested rounded rects so the
+		# border ring wraps the staircase corners instead of being clipped flat.
 		PixelDraw.pixel_round_rect(self, Rect2(face.position - Vector2(4, 4), face.size + Vector2(8, 8)),
 			Palette.OUTLINE, ROUND + 4.0, ROUND_STEP)
-		PixelDraw.pixel_round_rect(self, face, fill, ROUND, ROUND_STEP)
-		draw_rect(Rect2(face.position + Vector2(ROUND, 0.0), Vector2(face.size.x - ROUND * 2.0, 6)), fill.darkened(0.3))
-		draw_rect(Rect2(face.position + Vector2(0.0, ROUND), Vector2(6, face.size.y - ROUND * 2.0)), fill.darkened(0.3))
+		PixelDraw.pixel_round_rect(self, face, fill.darkened(0.3), ROUND, ROUND_STEP)
+		PixelDraw.pixel_round_rect(self, Rect2(face.position + Vector2(6, 6), face.size - Vector2(12, 12)),
+			fill, maxf(0.0, ROUND - 6.0), ROUND_STEP)
 	else:
 		PixelDraw.beveled_round(self, face, fill, Palette.BEVEL_HI, Palette.BEVEL_LO,
 			Palette.OUTLINE, 6.0, 4.0, ROUND, ROUND_STEP)

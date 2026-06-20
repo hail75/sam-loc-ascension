@@ -186,7 +186,13 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 	var deck_centre := _last_played.global_position + Vector2(_vw() * 0.5, CARD_H * 0.5)
 	_show_deck(deck_centre)
 	var deck_tl := deck_centre - Vector2(HAND_W, CARD_H) * 0.5
-	var slots := _hand_slot_positions()   # your final fan, global top-left per card
+	# Your final fan's LOCAL slot x's (same formula _build_hand_from uses). The
+	# player's backs are parented to _hand and fly to these local slots, so they
+	# land exactly where the face-up fan rebuilds — no matter where _hand sits.
+	var hand_n := SamLocRules.HAND_SIZE
+	var hand_step := HAND_MAX_STEP if hand_n <= 1 else minf(HAND_MAX_STEP, (HAND_AVAIL - HAND_W) / (hand_n - 1))
+	var hand_total := HAND_W + hand_step * (hand_n - 1)
+	var hand_start := (_vw() - hand_total) * 0.5
 	var your_backs: Array = []
 	var hi := 0
 	var total := SamLocRules.HAND_SIZE * SamLocRules.NUM_PLAYERS
@@ -201,14 +207,18 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 			# Dealt cards fly at 0.75 scale (scaled around their centre).
 			back.pivot_offset = Vector2(HAND_W, CARD_H) * 0.5
 			back.scale = Vector2.ONE * DEAL_FLY_SCALE
-			back.position = deck_tl
-			add_child(back)
 			var target: Vector2
 			if p == 0:
-				target = slots[hi]
+				# Parent to _hand and aim at the LOCAL slot, so the back lands at the
+				# same level the face-up fan rebuilds to.
+				_hand.add_child(back)
+				back.position = deck_tl - _hand.global_position
+				target = Vector2(hand_start + hi * hand_step, 0.0)
 				hi += 1
 				your_backs.append(back)
 			else:
+				add_child(back)
+				back.position = deck_tl
 				target = _origin_for(p) - Vector2(HAND_W, CARD_H) * 0.5
 			var is_bot: bool = p != 0
 			var tw := create_tween()
@@ -253,18 +263,6 @@ func _make_back() -> Card:
 	c.card_width = int(HAND_W)
 	c.face_down = true
 	return c
-
-## Global top-left position of each card in your final 10-card fan.
-func _hand_slot_positions() -> Array:
-	var n := SamLocRules.HAND_SIZE
-	var step := HAND_MAX_STEP if n <= 1 else minf(HAND_MAX_STEP, (HAND_AVAIL - HAND_W) / (n - 1))
-	var total := HAND_W + step * (n - 1)
-	var start := (_vw() - total) * 0.5
-	var base := _hand.global_position
-	var out: Array = []
-	for i in n:
-		out.append(base + Vector2(start + i * step, 0.0))
-	return out
 
 func _show_deck(centre: Vector2) -> void:
 	_hide_deck()
@@ -560,6 +558,11 @@ func _relayout() -> void:
 	_pass_btn.offset_right = start + bw
 	_play_btn.offset_left = start + bw + gap
 	_play_btn.offset_right = start + bw + gap + bw
+	# Nudge the button pair up a touch off the very bottom edge (set from code so
+	# it survives the editor re-saving the .tscn).
+	for btn in [_pass_btn, _play_btn]:
+		btn.offset_top = -118.0
+		btn.offset_bottom = -20.0
 
 ## Pin a seat to a top-left design coordinate in REAL-canvas space.
 func _place_seat(seat: Seat, x: float, y: float) -> void:
@@ -713,7 +716,10 @@ func _on_card_input(event: InputEvent, card: Card) -> void:
 		var sel: bool = not _selected.get(card, false)
 		_selected[card] = sel
 		card.position.y = -SELECT_LIFT if sel else 0.0
-		card.z_index = 1 if sel else 0
+		# Keep the fan's natural draw order (right card on top of its left
+		# neighbour) so a lifted card only overlays the card to its LEFT — the
+		# next card to the right stays clear and easy to tap.
+		card.z_index = 0
 
 func _on_play() -> void:
 	# During the báo sâm window the play button means "declare", not "play".
