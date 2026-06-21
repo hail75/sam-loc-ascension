@@ -10,16 +10,52 @@ extends RefCounted
 ## except for chops:
 ##   - a QUAD chops a single deuce          (1 quad  > 1 two)
 ##   - a DOUBLE QUAD chops a pair of deuces  (2 quads > 2 twos)
+##   - a higher QUAD chops a lower QUAD
 ## Straights run on the order A,2,3,…,10,J,Q,K,A — they may start on an ace or a
 ## deuce and end no higher than an ace (no wrap past the ace). Leading (an empty
 ## table) any valid combo is legal. Passing/timing out folds you for the trick.
+##
+## FINISHING ON A DEUCE IS A FOUL (thối 2): a play that empties your hand while still
+## holding a 2 is allowed, but you DON'T win — the deal ends, you forfeit the pot and
+## pay FINISH_TWO_STAKE to each other player (during báo sâm it fails the declaration).
+## Shed your 2s before the final play to actually win.
+##
+## BLOCK OBLIGATION (đền): when you LEAD a fresh trick and the player on your left
+## holds exactly one card, you must lead your single highest card. Failing to (any
+## other lead) is a soft violation — not rejected, just flagged. If that one-card
+## neighbour then WINS the deal, you pay the đền penalty (see `settle`).
+##
+## MONEY (winner-takes-all, all amounts are multiples of STAKE coins):
+##   - Normal deal: the winner takes the whole pot — every loser pays 1 stake per
+##     card still in hand, plus SPECIAL_STAKE per leftover 2 or quad. A móm loser who
+##     never played a card (full HAND_SIZE hand) pays MOM_STAKE extra on the cards.
+##   - Đền: an offender who broke the block obligation toward the winner pays their
+##     own normal-loss amount to EACH other loser. Settled as a separate beat (the
+##     `feed` array from `settle`) just before the pot itself.
+##   - Thối 2 (foul finish): no pot is won — the fouler pays FINISH_TWO_STAKE to EACH
+##     other player (also via `feed`); no winner-takes-all settle that deal.
+##   - Báo sâm: the declarer wins/pays BAO_SAM_PER per opponent (see `settle`).
+##   - Chặt (chop): the instant a 2/quad is bombed, the chopped player pays the
+##     chopper CHOP_STAKE per chopped 2/quad, times the chop chain's depth (a chop
+##     that itself chops a chop pays double, the next triple, …). Chops are
+##     immediate side-payments reported in `apply`'s result, NOT part of settle.
 
 const NUM_PLAYERS := 4
 const HAND_SIZE := 10
-const WIN_REWARD := 30
-const LOSS_PENALTY := 10
-## Báo sâm stakes: the declarer takes (or pays) this much PER opponent.
-const BAO_SAM_STAKE := 20
+## Money. Every stake below is counted in these units; one unit is STAKE coins.
+const STAKE := 10
+## Extra stake units a loser pays per leftover 2 or quad still in hand.
+const SPECIAL_STAKE := 5
+## Extra stake units a "móm" loser pays — one who never played a single card all
+## deal and finishes holding their full HAND_SIZE hand (10 stake for the cards → 15).
+const MOM_STAKE := 5
+## Stake units the báo sâm declarer wins (success) or pays (failure) PER opponent.
+const BAO_SAM_PER := 20
+## Stake units paid per chopped 2/quad, multiplied by the chop chain's depth.
+const CHOP_STAKE := 15
+## Stake units a "thối 2" fouler (who emptied their hand on a play holding a deuce)
+## pays to EACH other player. They forfeit the win.
+const FINISH_TWO_STAKE := 15
 
 ## Combo kinds. Order/values are internal; compare only within the same kind.
 enum Combo { INVALID, SINGLE, PAIR, TRIPLE, QUAD, STRAIGHT, DOUBLE_QUAD }
@@ -34,23 +70,99 @@ static func rank(card: Array) -> int:
 		return 13  # Two — highest single
 	return col - 1
 
-## Per-player balance change for a finished match.
-##  * Báo sâm declared: the declarer wins/pays the stake against EACH opponent
-##    (+20 each on success, -20 each on failure); opponents take the other side.
-##  * Otherwise: the winner gains, the losers each pay.
-static func settle(state: GameStateData) -> Array:
+## Per-player balance change for a finished match (winner-takes-all). Returns
+## { feed: Array, deltas: Array } — both NUM_PLAYERS-long and zero-sum:
+##  * `feed` — the đền (block-obligation) side-penalty, paid out FIRST/separately so
+##    the UI can pop it as its own beat before the pot. The offender (the winner's
+##    right-hand neighbour, who failed to lead their highest card while the winner
+##    held one) pays their own normal-loss amount to EACH other loser. Empty (all
+##    zero) when nobody owed it.
+##  * `deltas` — the pot itself:
+##     - Báo sâm declared: the declarer wins/pays BAO_SAM_PER PER opponent (success →
+##       +per each, +3·per total; failure → −per each, −3·per total).
+##     - Otherwise: each loser pays 1 stake per card left + SPECIAL_STAKE per leftover
+##       2/quad (móm losers pay MOM_STAKE extra), and the winner sweeps the whole pot.
+## (Chặt side-payments are settled immediately during play — see `_play` — and are
+## NOT included here.)
+static func settle(state: GameStateData) -> Dictionary:
 	var deltas: Array = []
+	var feed: Array = []
+	for _p in NUM_PLAYERS:
+		deltas.append(0)
+		feed.append(0)
 	if state.bao_sam != -1:
 		var success := not state.bao_sam_failed
+		var per := BAO_SAM_PER * STAKE
 		for p in NUM_PLAYERS:
 			if p == state.bao_sam:
-				deltas.append(BAO_SAM_STAKE * (NUM_PLAYERS - 1) * (1 if success else -1))
+				deltas[p] = (NUM_PLAYERS - 1) * per * (1 if success else -1)
 			else:
-				deltas.append(BAO_SAM_STAKE * (-1 if success else 1))
-		return deltas
+				deltas[p] = per * (-1 if success else 1)
+		return {"feed": feed, "deltas": deltas}
+	# Thối 2 (foul finish): no pot is won — the fouler pays FINISH_TWO_STAKE to EACH
+	# other player and there is no winner-takes-all settle.
+	if state.foul_finish != -1:
+		var f := state.foul_finish
+		for q in NUM_PLAYERS:
+			if q == f:
+				continue
+			feed[q] += FINISH_TWO_STAKE * STAKE
+			feed[f] -= FINISH_TWO_STAKE * STAKE
+		return {"feed": feed, "deltas": deltas}
+	var pot := 0
 	for p in NUM_PLAYERS:
-		deltas.append(WIN_REWARD if p == state.winner else -LOSS_PENALTY)
-	return deltas
+		if p == state.winner:
+			continue
+		var pen := _loss_penalty(state.hands[p])
+		deltas[p] = -pen
+		pot += pen
+	deltas[state.winner] = pot
+	# Đền: if the winner's right-hand neighbour failed the "lead your highest while I
+	# hold one card" duty toward the winner, that offender pays their own normal-loss
+	# amount to EACH OTHER loser (everyone but the winner and themselves).
+	if state.winner != -1 and not state.block_violated.is_empty() \
+			and state.block_violated[state.winner]:
+		var feeder := (state.winner - 1 + NUM_PLAYERS) % NUM_PLAYERS
+		var pen := _loss_penalty(state.hands[feeder])
+		for L in NUM_PLAYERS:
+			if L == state.winner or L == feeder:
+				continue
+			feed[L] += pen
+			feed[feeder] -= pen
+	return {"feed": feed, "deltas": deltas}
+
+## A loser's pot contribution: 1 stake per leftover card + SPECIAL_STAKE per
+## leftover 2 or quad, all in coins. A "móm" loser who never played a card (still
+## holds the full HAND_SIZE hand) pays MOM_STAKE extra on the card count.
+static func _loss_penalty(hand: Array) -> int:
+	var cards := hand.size()
+	if cards == HAND_SIZE:
+		cards += MOM_STAKE
+	return (cards + _special_count(hand) * SPECIAL_STAKE) * STAKE
+
+## Human-facing reasons a loser's normal-loss is inflated, for the UI to caption
+## next to the −amount. "CÓNG" — they never played a card (full HAND_SIZE hand).
+## "THỐI" — they're stuck with a 2 or a quad. Either, both, or neither may apply.
+## (The đền penalty is separate — driven off `settle`'s `feed`, captioned "ĐỀN".)
+static func loss_reasons(hand: Array) -> Array:
+	var out: Array = []
+	if hand.size() == HAND_SIZE:
+		out.append("CÓNG")
+	if _special_count(hand) > 0:
+		out.append("THỐI")
+	return out
+
+## Count of leftover deuces plus whole quads in `hand` — each adds a special
+## penalty. (Four 2s count as four deuces AND one quad; an extreme edge.)
+static func _special_count(hand: Array) -> int:
+	var buckets := _buckets(hand)
+	var n := 0
+	for col in buckets:
+		if col == 1:                       # every leftover deuce
+			n += buckets[col].size()
+		if buckets[col].size() == 4:       # a whole quad still in hand
+			n += 1
+	return n
 
 ## Deal a fresh match: 10 cards each. `first` leads (the previous match's winner;
 ## defaults to player 0 for the very first match).
@@ -60,6 +172,7 @@ static func deal(rng: RandomNumberGenerator, first: int = 0) -> GameStateData:
 	for _p in NUM_PLAYERS:
 		s.hands.append([])
 		s.passed.append(false)
+		s.block_violated.append(false)
 	for p in NUM_PLAYERS:
 		for _i in HAND_SIZE:
 			s.hands[p].append(deck.pop_back())
@@ -161,8 +274,10 @@ static func _buckets(cards: Array) -> Dictionary:
 
 # --- actions --------------------------------------------------------------
 
-## Apply an action. Returns { ok: bool, state: GameStateData, reason: String }.
-## On failure the original state is returned unchanged.
+## Apply an action. Returns { ok: bool, state: GameStateData, reason: String,
+## chops: Array }. `chops` (present on a successful play) lists any immediate chặt
+## side-payments — each { from, to, amount, level } — for the transport layer to
+## apply to balances. On failure the original state is returned unchanged.
 static func apply(state: GameStateData, action: Dictionary) -> Dictionary:
 	if state.finished:
 		return _fail(state, "match over")
@@ -212,30 +327,145 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 		if idx == -1:
 			return _fail(state, "card not in hand")
 		hand.remove_at(idx)
+	# Block obligation (đền): whenever the player on your left holds exactly one card
+	# (and a single is in play — leading, or answering a single), you must play your
+	# single highest card. Playing anything else flags you against that neighbour; if
+	# they go on to win the deal, you pay the đền penalty in settle. Soft rule — the
+	# play is NOT rejected, only flagged, and the flag tracks your LATEST such action
+	# (overwritten each turn). (Read pre-play state — before this play removed cards.)
+	var nseat := _block_target(state, p)
+	if nseat != -1:
+		ns.block_violated[nseat] = not _is_highest_single(state.hands[p], cards)
+
+	# Chặt: if this play bombs the table's 2/quad, record the side-payment and
+	# escalate the chop chain (next chop in the trick pays a level higher).
+	var chops: Array = []
+	var cc := _chop_count(state.table, cards)
+	if cc > 0:
+		var level := state.chop_level + 1
+		ns.chop_level = level
+		chops.append({
+			"from": state.table_owner,
+			"to": p,
+			"amount": level * CHOP_STAKE * STAKE * cc,
+			"level": level,
+		})
+	else:
+		ns.chop_level = 0
+
 	ns.table = cards.duplicate(true)
 	ns.table_owner = p
+	# Thối 2 (foul finish): emptying your hand on a play that still holds a deuce is
+	# allowed, but you DON'T win — the deal ends, you forfeit the pot and pay the foul
+	# penalty (see `settle`). During báo sâm it also means the declaration failed.
+	if hand.is_empty() and _has_two(cards):
+		ns.finished = true
+		ns.winner = -1
+		ns.foul_finish = p
+		if ns.bao_sam != -1:
+			ns.bao_sam_failed = true
+		return {"ok": true, "state": ns, "reason": "", "chops": chops}
 	# Báo sâm: anyone other than the declarer landing a play means the declarer's
 	# lead was beaten — the declaration is broken and the deal ends in failure.
 	if ns.bao_sam != -1 and p != ns.bao_sam:
 		ns.bao_sam_failed = true
 		ns.finished = true
 		ns.winner = p
-		return {"ok": true, "state": ns, "reason": ""}
+		return {"ok": true, "state": ns, "reason": "", "chops": chops}
 	if hand.is_empty():
 		ns.finished = true
 		ns.winner = p
-		return {"ok": true, "state": ns, "reason": ""}
+		return {"ok": true, "state": ns, "reason": "", "chops": chops}
 
-	# If everyone else has already folded, p takes the trick and leads anew.
+	# If everyone else has already folded — or the play is intrinsically unbeatable
+	# (an ace-high straight, triple 2s, quad 2s: nothing in the deck can answer) — p
+	# takes the trick and leads a fresh one. We deliberately do NOT auto-fold players
+	# on a merely-can't-be-beaten-right-now read of the hidden hands: every beatable
+	# trick is left for each player to answer or pass by hand (the human keeps their
+	# turn; bots pass on their timer).
 	var nxt := _next_active(ns, p)
-	if nxt == p:
+	if nxt == p or _is_unbeatable(ns.table):
 		_new_trick(ns, p)
 	else:
 		ns.current = nxt
-	return {"ok": true, "state": ns, "reason": ""}
+	return {"ok": true, "state": ns, "reason": "", "chops": chops}
+
+## Does `cards` chop `table`? Returns the count of chopped 2s/quads (0 = no chop):
+##   - a QUAD over a single deuce        -> 1
+##   - a DOUBLE QUAD over a pair of 2s   -> 2
+##   - a higher QUAD over a lower QUAD   -> 1
+## (`cards` is assumed to already beat `table`.)
+static func _chop_count(table: Array, cards: Array) -> int:
+	if table.is_empty():
+		return 0
+	var ct := classify(table)
+	var cp := classify(cards)
+	if ct.type == Combo.SINGLE and table[0][1] == 1 and cp.type == Combo.QUAD:
+		return 1
+	if ct.type == Combo.PAIR and table[0][1] == 1 and cp.type == Combo.DOUBLE_QUAD:
+		return 2
+	if ct.type == Combo.QUAD and cp.type == Combo.QUAD:
+		return 1
+	return 0
+
+## The left-hand neighbour `p` owes the block obligation to this turn, or -1. It
+## fires only when that neighbour holds exactly one card AND a single is in play
+## (the table is empty — a lead — or a single), since that's the only spot where a
+## single high card actually blocks their win.
+static func _block_target(state: GameStateData, p: int) -> int:
+	var nseat := (p + 1) % NUM_PLAYERS
+	if state.hands[nseat].size() != 1:
+		return -1
+	if not state.table.is_empty() and classify(state.table).type != Combo.SINGLE:
+		return -1
+	return nseat
+
+## Is `play` exactly the single highest-ranked card in `hand`? (Used by the block
+## obligation: a compliant lead while the next player holds one card.) Ties on the
+## top rank are fine — any card of the top rank counts.
+static func _is_highest_single(hand: Array, play: Array) -> bool:
+	if play.size() != 1:
+		return false
+	var hi := -1
+	for c in hand:
+		hi = maxi(hi, rank(c))
+	return rank(play[0]) == hi
+
+## True if any card in `cards` is a deuce (col 1).
+static func _has_two(cards: Array) -> bool:
+	for c in cards:
+		if c[1] == 1:
+			return true
+	return false
+
+## A play that NO possible hand could ever beat — so the trick can end at once
+## instead of forcing a pointless round of passes. This is an INTRINSIC property of
+## the play (it never peeks at anyone's hand), so it can't auto-fold a player out of
+## a trick they could actually answer:
+##   - an ace-high straight (top value 14): nothing outranks it at its length
+##   - triple 2s: the top triple, and triples can't be chopped
+##   - quad 2s: the top quad, and a double-quad only chops a PAIR of 2s
+static func _is_unbeatable(table: Array) -> bool:
+	if table.is_empty():
+		return false
+	var c := classify(table)
+	var two := rank([0, 1])   # single-rank of a deuce (the highest rank)
+	match c.type:
+		Combo.STRAIGHT:
+			return c.key == 14
+		Combo.TRIPLE:
+			return c.key == two
+		Combo.QUAD:
+			return c.key == two
+	return false
 
 static func _pass(state: GameStateData, p: int) -> Dictionary:
 	var ns := state.clone()
+	# Block obligation: passing while your left neighbour holds one card (in a single
+	# spot) is a failure to lead your highest — flag it (overwrites your latest action).
+	var nb := _block_target(state, p)
+	if nb != -1:
+		ns.block_violated[nb] = true
 	# A báo sâm declarer only ever acts on their own (empty) lead; passing there
 	# means abandoning the open right — the declaration fails immediately.
 	if ns.bao_sam == p and ns.table.is_empty():
@@ -252,10 +482,12 @@ static func _pass(state: GameStateData, p: int) -> Dictionary:
 		ns.current = _next_active(ns, p)
 	return {"ok": true, "state": ns, "reason": ""}
 
-## Clear the table and refold-reset so `leader` opens a new trick.
+## Clear the table and refold-reset so `leader` opens a new trick. Ends the chop
+## chain (a fresh trick starts at chain depth 0).
 static func _new_trick(ns: GameStateData, leader: int) -> void:
 	ns.table = []
 	ns.table_owner = -1
+	ns.chop_level = 0
 	for q in NUM_PLAYERS:
 		ns.passed[q] = false
 	ns.current = leader
@@ -288,31 +520,29 @@ static func _fail(state: GameStateData, reason: String) -> Dictionary:
 
 # --- reference bot policy (offline only) ----------------------------------
 
-## A deterministic, heuristic move for `player`: the cards to play, or [] to
-## pass. Pure helper for the local bots — NOT part of the authoritative rules
-## (the future server drives real players over the network instead).
-##
-## The heuristic, in one breath: shed cheap cards, hoard control (2s and quads),
-## and only spend that control when an opponent is about to go out. Concretely —
-##   * Leading: dump your lowest non-control combo (longest straights first, to
-##     thin the hand fastest); but if a rival is down to <=2 cards, slam your
-##     highest single so they can't dump on your lead.
-##   * Following: among every legal answer, take the one that wastes the least
-##     control while shedding the most. If even the cheapest answer means burning
-##     a 2 or cracking a quad and nobody is close to winning, fold instead.
-##   * Quad/double-quad chops on deuces are saved unless a rival is near out.
-##   * Going out: if the whole hand is one legal combo, play it and win.
+## A deterministic, heuristic move for `player`: the cards to play, or [] to pass.
+## Pure helper for the local bots — NOT authoritative (the future server drives
+## real players over the network instead). It plays the new economy:
+##   * Going out wins the WHOLE pot, so the bot grabs any legal finisher at once.
+##   * Leftover 2s/quads sting (+SPECIAL_STAKE each), so the bot hoards them while
+##     it's safe but dumps them once it's short or about to lose.
+##   * A chop both pays immediately AND sheds a liability, so the bot spends bombs
+##     when a rival is closing in or its own hand is short.
+##   * It avoids fouling (emptying the hand on a 2 forfeits the win + pays a penalty),
+##     taking the foul only as a last resort when no other lead exists.
 static func find_play(state: GameStateData, player: int) -> Array:
 	if state.finished or state.current != player or state.passed[player]:
 		return []
 	var hand: Array = state.hands[player]
 	var opp_min := _min_opponent_cards(state, player)
+	var my_n := hand.size()
+	var next_n: int = state.hands[(player + 1) % NUM_PLAYERS].size()
 	if state.table.is_empty():
-		return _lead(hand, opp_min)
-	return _respond(state.table, hand, opp_min)
+		return _lead(hand, opp_min, my_n, next_n)
+	return _respond(state.table, hand, opp_min, my_n, next_n)
 
-## Fewest cards held by any OTHER player — how close the table is to someone
-## going out, which is when hoarded control becomes worth spending.
+## Fewest cards held by any OTHER player — how close someone is to going out,
+## which is when hoarded control becomes worth spending.
 static func _min_opponent_cards(state: GameStateData, player: int) -> int:
 	var m := 99
 	for q in NUM_PLAYERS:
@@ -320,57 +550,109 @@ static func _min_opponent_cards(state: GameStateData, player: int) -> int:
 			m = mini(m, state.hands[q].size())
 	return m
 
-static func _lead(hand: Array, opp_min: int) -> Array:
-	# Whole hand is one combo -> go out now and win.
-	if hand.size() >= 1 and is_valid(hand):
+static func _lead(hand: Array, opp_min: int, my_n: int, next_n: int) -> Array:
+	# Win now: the whole hand is one legal combo and isn't an illegal deuce finish.
+	if is_valid(hand) and not _has_two(hand):
 		return hand.duplicate(true)
-	# A rival is about to go out: lead something they can't beat to deny a dump.
+	# Block obligation (đền): the player on our left holds exactly one card. We MUST
+	# lead our single highest card (the bot always adheres) or eat the đền penalty if
+	# they win. Skip only if that highest single would be an illegal deuce finish.
+	if next_n == 1:
+		var top := _highest_single(hand)
+		if not top.is_empty() and not _illegal_finish(hand, [top]):
+			return [top]
+	# A rival is about to go out: lead the strongest card you can to deny their dump
+	# (a 2 is ideal — unbeatable but by a chop). Skip if it's a lone deuce you'd be
+	# illegally finishing on.
 	if opp_min <= 2:
-		var high := _highest_single(hand)
-		return [high] if not high.is_empty() else []
-	# Otherwise dump the cheapest combo (cheapest = sheds most, hoards control).
-	return _best(_enum_all(hand), hand)
+		var hs := _highest_single(hand)
+		if not hs.is_empty() and not _illegal_finish(hand, [hs]):
+			return [hs]
+	# Otherwise dump the most economical lead: sheds the most, hoards control while
+	# it's safe, and offloads 2s/quads once the endgame turns them into liabilities.
+	var leads := _legal_leads(hand)
+	if leads.is_empty():
+		# Only a foul finish remains (e.g. our last card is a lone 2): take it rather
+		# than stall the lead — we "thối" and forfeit, but the deal moves on.
+		return hand.duplicate(true)
+	return _best(leads, hand, opp_min, my_n)
 
-static func _respond(table: Array, hand: Array, opp_min: int) -> Array:
-	var plays := _enum_all(hand)
-	plays.append_array(_enum_double_quads(hand))   # for chopping a pair of 2s
-	var legal: Array = []
-	for pl in plays:
-		if beats(table, pl):
-			legal.append(pl)
+static func _respond(table: Array, hand: Array, opp_min: int, my_n: int, next_n: int) -> Array:
+	var legal := _legal_answers(table, hand)
 	if legal.is_empty():
 		return []
-	var best := _best(legal, hand)
-	# Hold chops (quad / double-quad on deuces) unless a rival is near out.
-	if _is_chop(table, best) and opp_min > 3:
+	# Going out takes the whole pot — grab any legal finisher immediately.
+	for pl in legal:
+		if pl.size() == my_n:
+			return pl
+	# Block obligation (đền): the player on our left holds one card and the table is a
+	# single — adhere by beating it with our highest single if we can (the bot always
+	# plays its top card here rather than a weak one and eating the penalty).
+	if next_n == 1 and classify(table).type == Combo.SINGLE:
+		var top := _highest_single(hand)
+		if not top.is_empty() and beats(table, [top]) and not _illegal_finish(hand, [top]):
+			return [top]
+	var best := _best(legal, hand, opp_min, my_n)
+	if best.is_empty():
 		return []
-	# Cheapest legal answer still costs control (a 2, or cracking a quad) and
-	# nobody is close to winning: keep the powder dry and fold this trick.
-	if opp_min > 3 and _control_cost(hand, best) > 0:
+	# Chops pay on the spot AND shed a liability: spend them when a rival is closing
+	# in or your own hand is short; sit on the bomb early while nobody threatens.
+	if _is_chop(table, best):
+		return best if (opp_min <= 3 or my_n <= 6) else []
+	# The cheapest answer still burns real control (a 2, or cracking a quad) and
+	# nobody is close to out: keep the powder dry and fold this trick.
+	if opp_min > 3 and my_n > 5 and _control_cost(hand, best) > 0:
 		return []
 	return best
 
-## Pick the play with the lowest cost (best). [] if there are no candidates.
-static func _best(plays: Array, hand: Array) -> Array:
+## Every legal lead: any combo from the hand that isn't an illegal deuce finish.
+static func _legal_leads(hand: Array) -> Array:
+	var out: Array = []
+	for pl in _enum_all(hand):
+		if not _illegal_finish(hand, pl):
+			out.append(pl)
+	return out
+
+## Every legal answer to `table`: a beating combo (incl. double-quad chops) that
+## isn't an illegal deuce finish.
+static func _legal_answers(table: Array, hand: Array) -> Array:
+	var plays := _enum_all(hand)
+	plays.append_array(_enum_double_quads(hand))
+	var out: Array = []
+	for pl in plays:
+		if beats(table, pl) and not _illegal_finish(hand, pl):
+			out.append(pl)
+	return out
+
+## A play that would empty the hand while it still holds a deuce — a "thối 2" foul
+## (legal, but forfeits the win + pays a penalty) the bot avoids by default.
+static func _illegal_finish(hand: Array, play: Array) -> bool:
+	return play.size() == hand.size() and _has_two(play)
+
+## Pick the lowest-scoring (best) play; [] if there are none.
+static func _best(plays: Array, hand: Array, opp_min: int, my_n: int) -> Array:
 	var best: Array = []
 	var best_score := INF
 	for pl in plays:
 		if pl.is_empty():
 			continue
-		var s := _score(hand, pl)
+		var s := _score(hand, pl, opp_min, my_n)
 		if best.is_empty() or s < best_score:
 			best_score = s
 			best = pl
 	return best
 
-## Lower is better: control spent dominates, then prefer shedding more cards,
-## then prefer a lower rank (keep the big stuff in hand).
-static func _score(hand: Array, play: Array) -> float:
-	var key: int = classify(play).key
-	return _control_cost(hand, play) * 10.0 - play.size() * 5.0 + float(key)
+## Lower = better. Coin-minded: shedding cards is good, dumping end-of-hand
+## liabilities (2s/quads) is good when you're losing/short, and spending control
+## is bad while you're safe but cheap once it's do-or-die.
+static func _score(hand: Array, play: Array, opp_min: int, my_n: int) -> float:
+	var s := -float(play.size()) * 6.0                       # shed more cards
+	s += float(_control_cost(hand, play)) * _control_weight(opp_min, my_n)
+	s -= float(_liability_shed(hand, play)) * _relief_weight(opp_min, my_n)
+	s += float(classify(play).key) * 0.2                     # keep the big cards
+	return s
 
-## How much "control" a play burns: deuces are precious, and touching a quad you
-## hold (to play a single/pair/triple/quad off it) throws away a future chop.
+## Control burned: deuces and any card off a held quad are winning weapons.
 static func _control_cost(hand: Array, play: Array) -> int:
 	var counts := {}
 	for c in hand:
@@ -379,18 +661,46 @@ static func _control_cost(hand: Array, play: Array) -> int:
 	var cost := 0
 	for col in used:
 		if col == 1:                              # a deuce
-			cost += 80 * used[col].size()
-		if int(counts.get(col, 0)) == 4:          # spending any card of a held quad
-			cost += 60
+			cost += 8 * used[col].size()
+		if int(counts.get(col, 0)) == 4:          # touching a held quad
+			cost += 6
 	return cost
 
+## Liabilities offloaded: each 2 (and each whole quad) you play dodges its
+## SPECIAL_STAKE end penalty. In stake units, so it trades against control directly.
+static func _liability_shed(hand: Array, play: Array) -> int:
+	var counts := {}
+	for c in hand:
+		counts[c[1]] = int(counts.get(c[1], 0)) + 1
+	var used := _buckets(play)
+	var n := 0
+	for col in used:
+		if col == 1:                                                  # deuces gone
+			n += used[col].size()
+		if int(counts.get(col, 0)) == 4 and used[col].size() == 4:    # a quad gone
+			n += 1
+	return n * SPECIAL_STAKE
+
+## Hold control while safe; spend it freely once a rival is near out or your own
+## hand is short (do-or-die).
+static func _control_weight(opp_min: int, my_n: int) -> float:
+	if opp_min <= 2 or my_n <= 4:
+		return 1.0
+	if opp_min <= 3 or my_n <= 6:
+		return 4.0
+	return 10.0
+
+## Only bother dumping liabilities when you're likely to LOSE (a rival closing in
+## while your hand is still fat) or you're deep in your own endgame.
+static func _relief_weight(opp_min: int, my_n: int) -> float:
+	if opp_min <= 3 and my_n >= 6:
+		return 8.0
+	if my_n <= 5:
+		return 4.0
+	return 0.0
+
 static func _is_chop(table: Array, play: Array) -> bool:
-	var ct: Dictionary = classify(table)
-	if ct.type == Combo.SINGLE and table[0][1] == 1:
-		return classify(play).type == Combo.QUAD
-	if ct.type == Combo.PAIR and table[0][1] == 1:
-		return classify(play).type == Combo.DOUBLE_QUAD
-	return false
+	return _chop_count(table, play) > 0
 
 static func _highest_single(hand: Array) -> Array:
 	var best: Array = []

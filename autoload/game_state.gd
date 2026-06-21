@@ -10,7 +10,13 @@ signal played(player: int, cards: Array, data: GameStateData)
 signal passed(player: int, data: GameStateData)
 signal declared(player: int, data: GameStateData)
 signal rejected(reason: String)
-signal match_ended(winner: int, deltas: Array, balances: Array, data: GameStateData)
+## A chặt (chop) side-payment landed: `from_player` paid `to_player` `amount` coins
+## (balances already updated). Emitted right after the `played` that caused it.
+signal chopped(from_player: int, to_player: int, amount: int, balances: Array)
+## The deal is over. `feed` is the đền (block-obligation) side-penalty paid out
+## first as its own beat (all-zero when nobody owed it); `deltas` is the pot itself.
+## `balances` already reflects both.
+signal match_ended(winner: int, deltas: Array, feed: Array, balances: Array, data: GameStateData)
 
 const START_BALANCE := 8080
 
@@ -49,14 +55,26 @@ func _commit(action: Dictionary) -> bool:
 	match action["type"]:
 		"play":
 			played.emit(p, action["cards"], data)
+			# Settle any chặt side-payments this play triggered, then announce each
+			# so the table can pop the +/- amount over the two seats.
+			for chop in r.get("chops", []):
+				balances[chop["from"]] -= chop["amount"]
+				balances[chop["to"]] += chop["amount"]
+				chopped.emit(chop["from"], chop["to"], chop["amount"], balances)
 		"declare":
 			declared.emit(p, data)
 		_:
 			passed.emit(p, data)
 	if data.finished:
 		_last_winner = data.winner
-		var deltas := SamLocRules.settle(data)
+		var s := SamLocRules.settle(data)
+		var feed: Array = s["feed"]
+		var deltas: Array = s["deltas"]
+		# Apply the đền side-penalty first, then the pot — so balances are final, and
+		# the table can pop `feed` as its own beat ahead of `deltas`.
+		for i in feed.size():
+			balances[i] += feed[i]
 		for i in deltas.size():
 			balances[i] += deltas[i]
-		match_ended.emit(data.winner, deltas, balances, data)
+		match_ended.emit(data.winner, deltas, feed, balances, data)
 	return true

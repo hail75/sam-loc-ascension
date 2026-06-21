@@ -5,13 +5,15 @@
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_imta7"]
 atlas = ExtResource("2_imta7")
-region = Rect2(0, 0, 48, 64)
+region = Rect2(384, 128, 48, 64)
 
 [node name="Card" type="Control" unique_id=42205603]
 custom_minimum_size = Vector2(60, 80)
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("1_card")
+row = 2
+col = 8
 
 [node name="Shadow" type="TextureRect" parent="." unique_id=1385543203]
 modulate = Color(0.09411765, 0.03137255, 0.0627451, 0.55)

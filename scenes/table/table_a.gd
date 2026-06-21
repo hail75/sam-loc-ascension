@@ -36,10 +36,11 @@ const PILE_FADE := 0.28                     # how long the table pile takes to f
 const WIN_SETTLE := 0.6                     # let the winning play rest on the table before it fades
 
 const TURN_TIME := 20.0                     # seconds a turn (and the báo sâm window) lasts; the seat ring drains over this for everyone
-const BOT_DELAY_MIN := 1.5                  # bots act somewhere inside their turn
-const BOT_DELAY_MAX := 4.0
+const BOT_DELAY_MIN := 0.8                  # bots always take a brief "thinking" beat — quick, never instant
+const BOT_DELAY_MAX := 1.5
 const FLY_TIME := 0.32                      # play-to-centre flight
 const WIN_PAUSE := 3.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
+const FEED_PAUSE := 1.2                     # hold on the đền (block-penalty) pops before the normal settle pops
 const WIN_FADE := 0.45                      # the reveal cards + amount pops ease out before the next deal
 const DEAL_FLIGHT := 0.26                   # one card's deck->seat flight (longer = smoother)
 const DEAL_STAGGER := 0.045                 # gap between dealt cards (shorter = faster overall)
@@ -71,6 +72,7 @@ var _revealed: Array = []          # opponents' end-of-round reveal stacks; clea
 var _pops: Array = []              # floating +/- amount labels; live until the next deal
 var _selected: Dictionary = {}     # Card -> bool
 var _my_turn := false
+var _restarting := false            # the post-win "tap to restart" overlay is up / dismissing
 var _bao_window := false            # the báo sâm claim window is open (buttons mean claim/thôi)
 var _bao_passed: Array = []         # during the window: which of the 4 have thôi'd (declined)
 var _gen := 0                      # bumped each deal; cancels stale bot/timeout awaits
@@ -97,6 +99,7 @@ func _ready() -> void:
 	GameState.dealt.connect(_on_dealt)
 	GameState.played.connect(_on_played)
 	GameState.passed.connect(_on_passed)
+	GameState.chopped.connect(_on_chopped)
 	GameState.match_ended.connect(_on_match_ended)
 	GameState.rejected.connect(_on_rejected)
 	resized.connect(_relayout)
@@ -104,20 +107,14 @@ func _ready() -> void:
 	GameState.new_match()
 
 ## Vietnamese player-facing copy for each engine rejection reason.
-const WARN_VI := {
-	"not a valid combo": "Bộ bài không hợp lệ",
-	"doesn't beat the table": "Bài không đủ lớn",
-	"card not in hand": "Bài không có trong tay",
-	"you folded this trick": "Bạn đã bỏ lượt này",
-	"not your turn": "Chưa tới lượt bạn",
-}
-
 ## Only the human's plays get rejected (bots only ever submit legal moves), so a
-## rejection while it's your turn means your selection was illegal — warn softly.
-func _on_rejected(reason: String) -> void:
+## rejection while it's your turn means the selected cards weren't a legal play —
+## warn softly. (The other warning, "Chọn bài trước khi đánh", fires from _on_play
+## when nothing is selected.)
+func _on_rejected(_reason: String) -> void:
 	if not _my_turn:
 		return
-	_warn(WARN_VI.get(reason, "Nước đi không hợp lệ"))
+	_warn("Bài được chọn không hợp lệ")
 
 ## Small white warning that pops above the buttons and fades out.
 func _warn(text: String) -> void:
@@ -403,7 +400,7 @@ func _on_played(player: int, cards: Array, data: GameStateData) -> void:
 func _on_passed(_player: int, data: GameStateData) -> void:
 	_start_turn(data)
 
-func _on_match_ended(winner: int, deltas: Array, balances: Array, _data: GameStateData) -> void:
+func _on_match_ended(winner: int, deltas: Array, feed: Array, balances: Array, _data: GameStateData) -> void:
 	_set_my_turn(false)
 	# The match is over: freeze every countdown. Bump the generation so any stale
 	# bot/timeout await bails, kill the ring tween, and clear `active` on all seats
@@ -416,6 +413,9 @@ func _on_match_ended(winner: int, deltas: Array, balances: Array, _data: GameSta
 	if _data.bao_sam != -1:
 		var ok := not _data.bao_sam_failed
 		_chrome.banner_text = "BÁO SÂM THÀNH CÔNG" if ok else "BÁO SÂM THẤT BẠI"
+	elif _data.foul_finish != -1:
+		# Thối 2: no winner — the fouler forfeited by ending on a deuce.
+		_chrome.banner_text = "%s THỐI" % _seats[_data.foul_finish].hero_name
 	else:
 		_chrome.banner_text = "%s THẮNG" % _seats[winner].hero_name
 	# The winning play is still FLYING to the table when match_ended fires (see
@@ -427,27 +427,85 @@ func _on_match_ended(winner: int, deltas: Array, balances: Array, _data: GameSta
 	_fade_out_pile()
 	await get_tree().create_timer(PILE_FADE).timeout
 	_reveal_opponent_hands(_data)     # show what the others were holding
-	for p in _seats:
-		var gain: bool = deltas[p] >= 0
-		var text := "+%d" % deltas[p] if gain else str(deltas[p])
-		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY, gain)
-		_seats[p].balance = balances[p]   # tick to the settled amount
+	# Đền (block-penalty) first, as its own beat: a transient +/- over each affected
+	# seat, money ticked to the post-feed / pre-pot balance.
+	var has_feed := false
+	for v in feed:
+		if v != 0:
+			has_feed = true
+			break
+	if has_feed:
+		for p in _seats:
+			if feed[p] == 0:
+				continue
+			var fg: bool = feed[p] > 0
+			var ftext := "+%d" % feed[p] if fg else str(feed[p])
+			_pop_chop(_seats[p], ftext, POP_GOLD if fg else POP_GREY)
+			# Caption the payer: "THỐI" if they fouled (ended on a 2), else the đền offender.
+			if not fg:
+				var why := "THỐI" if p == _data.foul_finish else "ĐỀN"
+				_pop_reason(_seats[p], [why], false)
+			_seats[p].balance = balances[p] - deltas[p]   # after the feed, before the pot
+		await get_tree().create_timer(FEED_PAUSE).timeout
+	# Then the winner-takes-all settle pops — skipped entirely on a foul (no pot moved).
+	var has_delta := false
+	for v in deltas:
+		if v != 0:
+			has_delta = true
+			break
+	if has_delta:
+		for p in _seats:
+			var gain: bool = deltas[p] >= 0
+			var text := "+%d" % deltas[p] if gain else str(deltas[p])
+			_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY, gain)
+			# Caption WHY a loser owes extra (CÓNG / THỐI), beside the −amount. Skipped on
+			# báo sâm (fixed scoring, no card penalty) and for the winner.
+			if not gain and _data.bao_sam == -1:
+				_pop_reason(_seats[p], SamLocRules.loss_reasons(_data.hands[p]), true)
+			# Báo sâm declarer who fouled on a 2 still gets the "THỐI" caption.
+			elif p == _data.foul_finish:
+				_pop_reason(_seats[p], ["THỐI"], true)
+			_seats[p].balance = balances[p]   # tick to the settled amount
 	await get_tree().create_timer(WIN_PAUSE).timeout
-	await _fade_out_win()   # ease the reveal cards + pops away before the next deal
-	GameState.new_match()
+	await _fade_out_win()   # ease the reveal cards + pops away
+	_show_restart_prompt()  # then dim the screen and wait for a tap to re-deal
 
-## Floating "+30" / "-10" over a seat. It punches in (overshoot scale) and then
-## STAYS put — visible for the whole win moment, exactly as long as the revealed
-## opponent hands — and is cleared on the next deal (see `_clear_pops`). The
-## winner's gain is bigger and pops harder so it's obvious who took the pot.
+## A chặt (chop) just landed: pop a transient +amount / -amount over the chopper
+## and the chopped seat (synced to the bombing cards landing) and tick both seats'
+## money to the new balances.
+func _on_chopped(from_player: int, to_player: int, amount: int, bals: Array) -> void:
+	var g := _gen
+	# Wait for the chopping cards to reach the table so the +/- reads as the payout.
+	await get_tree().create_timer(FLY_TIME).timeout
+	if g != _gen:
+		return
+	_pop_chop(_seats[from_player], str(-amount), POP_GREY)
+	_pop_chop(_seats[to_player], "+%d" % amount, POP_GOLD)
+	_seats[from_player].balance = bals[from_player]
+	_seats[to_player].balance = bals[to_player]
+
+## End-of-match "+340" / "-110" over a seat: punches in and STAYS put for the whole
+## win moment (cleared on the next deal). Winner's gain is bigger and pops harder.
 func _pop_balance(seat: Seat, text: String, color: Color, gain: bool) -> void:
+	_pop_amount(seat, text, color, 76 if gain else 56, 10 if gain else 8,
+		1.18 if gain else 1.0, true)
+
+## Mid-game chặt amount: same punch, but transient — it holds a beat, floats up and
+## fades away (it is NOT tracked with the sticky end-of-match pops).
+func _pop_chop(seat: Seat, text: String, color: Color) -> void:
+	_pop_amount(seat, text, color, 56, 8, 1.12, false)
+
+## Floating amount label over a seat. `sticky` pops stay until the next deal (the
+## win settle); non-sticky pops punch in, hold, then drift up and fade out.
+func _pop_amount(seat: Seat, text: String, color: Color, fsize: int, osize: int,
+		over: float, sticky: bool) -> void:
 	var lbl := Label.new()
 	lbl.text = text
 	lbl.add_theme_font_override("font", NUM_FONT)
-	lbl.add_theme_font_size_override("font_size", 76 if gain else 56)
+	lbl.add_theme_font_size_override("font_size", fsize)
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Palette.OUTLINE)
-	lbl.add_theme_constant_override("outline_size", 10 if gain else 8)
+	lbl.add_theme_constant_override("outline_size", osize)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl.custom_minimum_size = Vector2(240.0, 0.0)
 	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -458,17 +516,60 @@ func _pop_balance(seat: Seat, text: String, color: Color, gain: bool) -> void:
 	lbl.position = center - Vector2(120.0, 36.0)
 	lbl.scale = Vector2(0.2, 0.2)
 	add_child(lbl)
-	_pops.append(lbl)
 
-	var over := 1.18 if gain else 1.0   # winner overshoots harder
 	var tw := create_tween()
-	# Punch in: snap up past full size with a springy back-ease, then settle. No
-	# drift, no fade — the label just stays put for the whole win moment and is
-	# removed on the next deal, so it lives exactly as long as the revealed cards.
+	# Punch in: snap up past full size with a springy back-ease, then settle.
 	tw.tween_property(lbl, "scale", Vector2.ONE * over, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	tw.tween_property(lbl, "scale", Vector2.ONE, 0.16) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	if sticky:
+		# Stays put for the whole win moment; removed on the next deal, so it lives
+		# exactly as long as the revealed opponent hands.
+		_pops.append(lbl)
+	else:
+		# Transient: hold a beat, then float up and fade out before freeing.
+		tw.tween_interval(0.7)
+		tw.tween_property(lbl, "position:y", lbl.position.y - 48.0, 0.4).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(lbl, "modulate:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
+		tw.chain().tween_callback(lbl.queue_free)
+
+## Penalty caption(s) in DearPix — CÓNG / THỐI / ĐỀN — stacked just under a seat's
+## −amount, same muted grey as the loss, so the player reads WHY they paid extra.
+## `sticky` matches the amount it annotates (settle pops stay; the đền pop is transient).
+func _pop_reason(seat: Seat, lines: Array, sticky: bool) -> void:
+	if lines.is_empty():
+		return
+	var center := seat.global_position + Vector2(seat.size.x * 0.5, seat.avatar_size * 0.5)
+	for i in lines.size():
+		var lbl := Label.new()
+		lbl.text = lines[i]
+		lbl.add_theme_font_override("font", POP_FONT)            # DearPix
+		lbl.add_theme_font_size_override("font_size", 28)
+		lbl.add_theme_color_override("font_color", POP_GREY)     # same grey as the "−"
+		lbl.add_theme_color_override("font_outline_color", Palette.OUTLINE)
+		lbl.add_theme_constant_override("outline_size", 6)
+		lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl.custom_minimum_size = Vector2(240.0, 0.0)
+		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lbl.z_index = 10
+		lbl.pivot_offset = Vector2(120.0, 16.0)
+		var y := center.y + 30.0 + float(i) * 32.0
+		lbl.position = Vector2(center.x - 120.0, y)
+		lbl.scale = Vector2(0.2, 0.2)
+		add_child(lbl)
+		var tw := create_tween()
+		tw.tween_property(lbl, "scale", Vector2.ONE * 1.1, 0.28) \
+			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw.tween_property(lbl, "scale", Vector2.ONE, 0.16) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		if sticky:
+			_pops.append(lbl)
+		else:
+			tw.tween_interval(0.7)
+			tw.tween_property(lbl, "position:y", y - 48.0, 0.4).set_ease(Tween.EASE_IN)
+			tw.parallel().tween_property(lbl, "modulate:a", 0.0, 0.4).set_ease(Tween.EASE_IN)
+			tw.chain().tween_callback(lbl.queue_free)
 
 ## Ease the win moment away: fade the revealed opponent hands and the +/- amount
 ## pops out together, then free them, just before the next deal arrives.
@@ -491,6 +592,48 @@ func _clear_pops() -> void:
 		if is_instance_valid(lbl):
 			lbl.queue_free()
 	_pops.clear()
+
+## After the win moment has faded, dim the whole screen and invite a tap to deal
+## again — the match no longer re-deals on its own. The dim overlay swallows the
+## tap, so nothing underneath reacts.
+func _show_restart_prompt() -> void:
+	_restarting = false
+	var dim := ColorRect.new()
+	dim.name = "RestartDim"
+	dim.color = Color(Palette.OUTLINE, 0.66)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	dim.z_index = 50
+	dim.modulate.a = 0.0
+	add_child(dim)
+	var lbl := Label.new()
+	lbl.text = "Chạm để bắt đầu lại"
+	lbl.add_theme_font_override("font", POP_FONT)
+	lbl.add_theme_font_size_override("font_size", 46)
+	lbl.add_theme_color_override("font_color", Palette.GOLD_HI)
+	lbl.add_theme_color_override("font_outline_color", Palette.OUTLINE)
+	lbl.add_theme_constant_override("outline_size", 8)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	dim.add_child(lbl)
+	create_tween().tween_property(dim, "modulate:a", 1.0, WIN_FADE)
+	dim.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT \
+				and event.pressed:
+			_on_restart_tap(dim))
+
+## Tap on the dim overlay: fade it out, then deal the next match.
+func _on_restart_tap(dim: ColorRect) -> void:
+	if _restarting:
+		return
+	_restarting = true
+	var tw := create_tween()
+	tw.tween_property(dim, "modulate:a", 0.0, 0.3).set_ease(Tween.EASE_IN)
+	tw.finished.connect(func() -> void:
+		dim.queue_free()
+		GameState.new_match())
 
 # --- responsive layout ----------------------------------------------------
 
@@ -710,8 +853,9 @@ func _rank(col: int) -> int:
 # --- input ----------------------------------------------------------------
 
 func _on_card_input(event: InputEvent, card: Card) -> void:
-	if not _my_turn:
-		return
+	# Cards can be picked/lifted any time (even while waiting), so you can line up
+	# a play before your turn comes round. Playing them is still gated on your turn
+	# by the disabled PLAY button.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		var sel: bool = not _selected.get(card, false)
 		_selected[card] = sel
@@ -737,6 +881,7 @@ func _on_play() -> void:
 			cards.append([c.row, c.col])
 			_pending_origins.append(c.global_position + Vector2(HAND_W, CARD_H) * 0.5)
 	if cards.is_empty():
+		_warn("Chọn bài trước khi đánh")
 		return
 	# Only hand the turn off if the play is legal; a rejected play (wrong number
 	# of cards, doesn't beat the table) leaves it your turn to pick again.
@@ -801,7 +946,7 @@ func _bao_sam_window(g: int) -> void:
 
 ## A bot waits a beat, then thôis (it can't báo sâm yet).
 func _bao_bot_thoi(p: int, g: int) -> void:
-	await get_tree().create_timer(randf_range(1.0, TURN_TIME * 0.6)).timeout
+	await get_tree().create_timer(randf_range(0.4, 1.4)).timeout
 	if g != _gen or not _bao_window:
 		return
 	_bao_thoi(p)
