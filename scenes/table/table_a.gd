@@ -20,9 +20,9 @@ const DECK_STATES: Array[Texture2D] = [
 
 const BASE_W := 720.0
 const HAND_W := 112.0                      # card width in your hand fan
-                                           # (bigger for readability; the fan
-                                           # stays in HAND_AVAIL so it just
-                                           # overlaps a little more)
+										   # (bigger for readability; the fan
+										   # stays in HAND_AVAIL so it just
+										   # overlaps a little more)
 const CELL_W := 48.0                       # a card cell's source width in cards.png
 const CARD_H := HAND_W * 64.0 / CELL_W     # matches the sheet cell aspect
 const CARD_PX := HAND_W / CELL_W           # on-screen pixels per source texel for a full card
@@ -39,7 +39,10 @@ const TURN_TIME := 20.0                     # seconds a turn (and the báo sâm 
 const BOT_DELAY_MIN := 0.8                  # bots always take a brief "thinking" beat — quick, never instant
 const BOT_DELAY_MAX := 1.5
 const FLY_TIME := 0.32                      # play-to-centre flight
-const WIN_PAUSE := 3.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
+const AN_TRANG_HOLD := 2.0                    # suspense beat after the deal before the ĂN TRẮNG reveal
+const AN_TRANG_FLY := 1.1                    # slow, dramatic ĂN TRẮNG instant-win flight
+const AN_TRANG_SMALL := 0.4                  # combo forms small over the seat, grows as it flies
+const WIN_PAUSE := 5.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
 const FEED_PAUSE := 1.2                     # hold on the đền (block-penalty) pops before the normal settle pops
 const WIN_FADE := 0.45                      # the reveal cards + amount pops ease out before the next deal
 const DEAL_FLIGHT := 0.26                   # one card's deck->seat flight (longer = smoother)
@@ -70,6 +73,7 @@ const POP_GREY := Color("9d978d")     # loser loss (muted)
 var last_played: Array = []        # cards currently resting on the table
 var _revealed: Array = []          # opponents' end-of-round reveal stacks; cleared on next deal
 var _pops: Array = []              # floating +/- amount labels; live until the next deal
+var _aura_nodes: Array = []        # ĂN TRẮNG resting combo + golden aura; until next deal
 var _selected: Dictionary = {}     # Card -> bool
 var _my_turn := false
 var _restarting := false            # the post-win "tap to restart" overlay is up / dismissing
@@ -148,6 +152,7 @@ func _on_dealt(data: GameStateData) -> void:
 	_rebuild_last_played()
 	_clear_revealed()   # drop last round's revealed opponent hands
 	_clear_pops()       # and the floating +/- amount labels
+	_clear_aura()       # and any ĂN TRẮNG combo + aura left on the table
 	for n in _hand.get_children():
 		n.free()
 	_selected.clear()
@@ -170,6 +175,11 @@ func _on_dealt(data: GameStateData) -> void:
 	for p in _seats:
 		_seats[p].card_count = data.hands[p].size()
 		_seats[p].show_badge = true
+	# ĂN TRẮNG: someone was dealt an instant-win hand — resolve it now (golden fly-out,
+	# banner, payout), skipping the báo sâm window and any normal play.
+	if data.an_trang_winner != -1:
+		_resolve_an_trang(data, g)
+		return
 	# The "special turn" before play: a window to claim báo sâm. May change the
 	# state (declarer leads), so read GameState.data fresh afterwards.
 	await _bao_sam_window(g)
@@ -470,6 +480,154 @@ func _on_match_ended(winner: int, deltas: Array, feed: Array, balances: Array, _
 	await _fade_out_win()   # ease the reveal cards + pops away
 	_show_restart_prompt()  # then dim the screen and wait for a tap to re-deal
 
+## ĂN TRẮNG (instant win on the deal): every qualifying combo flies to the table in a
+## golden aura, weakest tier first, strongest last. Then the banner names the winner
+## and the +/- payout pops (each loser pays 20 stake + their own 2/quad penalty).
+func _resolve_an_trang(data: GameStateData, g: int) -> void:
+	if _turn_tween:
+		_turn_tween.kill()
+	for p in _seats:
+		_seats[p].active = false
+	# The confusing beat: the buttons LOOK live (ĐÁNH/THÔI, not greyed) but input is
+	# gated off, so taps silently do nothing — "wait, why can't I do anything?" — held
+	# for a moment before the instant-win reveal explains it.
+	_my_turn = false
+	_play_btn.text = "ĐÁNH"
+	_pass_btn.text = "THÔI"
+	_play_btn.disabled = false
+	_pass_btn.disabled = false
+	_chrome.banner_text = ""
+	await get_tree().create_timer(AN_TRANG_HOLD).timeout
+	if g != _gen:
+		return
+	# Reveal: now lock the controls down for real.
+	_play_btn.disabled = true
+	_pass_btn.disabled = true
+	var plays := SamLocRules.an_trang_plays(data)
+	var winner: int = plays.back()["player"]
+	# Fly each combo in (only the combo cards — e.g. the four 2s, the triplet cards —
+	# not the whole hand), fading the previous one as the next (stronger) arrives.
+	for play in plays:
+		if g != _gen:
+			return
+		var combo := SamLocRules.an_trang_cards(data.hands[play["player"]], play["tier"])
+		# If the human is the one flying, drop the combo cards from their visible fan.
+		if play["player"] == 0:
+			var keep: Array = []
+			for c in data.hands[0]:
+				if not _card_in(combo, c):
+					keep.append(c)
+			_build_hand_from(keep)
+		_fade_aura()
+		_aura_nodes = await _an_trang_fly(play["player"], combo, g)
+		if g != _gen:
+			return
+	_chrome.banner_text = "%s ĂN TRẮNG" % _seats[winner].hero_name
+	# Reveal the losers' hands (the winner's combo is already on the table).
+	_reveal_opponent_hands(data, winner)
+	# Settle the deferred payout and pop the +/- amounts (THỐI caption for any 2/quad).
+	var res := GameState.commit_an_trang()
+	var deltas: Array = res["deltas"]
+	var balances: Array = res["balances"]
+	for p in _seats:
+		var gain: bool = deltas[p] >= 0
+		var text := "+%d" % deltas[p] if gain else str(deltas[p])
+		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY, gain)
+		if not gain and SamLocRules.loss_reasons(data.hands[p]).has("THỐI"):
+			_pop_reason(_seats[p], ["THỐI"], true)
+		_seats[p].balance = balances[p]
+	await get_tree().create_timer(WIN_PAUSE).timeout
+	if g != _gen:
+		return
+	await _fade_out_win()
+	_show_restart_prompt()
+
+## Fly one player's whole hand to the table, wrapped in a golden aura, slowly. Returns
+## the resting nodes (cards + aura) so the caller can fade them when the next combo
+## arrives or the round ends.
+func _an_trang_fly(player: int, cards: Array, g: int) -> Array:
+	var origin := _origin_for(player)
+	var n := cards.size()
+	var step := HAND_MAX_STEP if n <= 1 else minf(HAND_MAX_STEP, (HAND_AVAIL - HAND_W) / float(n - 1))
+	var total := HAND_W + step * (n - 1)
+	var startx := (_vw() - total) * 0.5
+	var ty := _last_played.global_position.y
+	# Aura + fan are ONE rigid group so they stay glued together — the whole group
+	# flies as a unit (no separate aura drifting at its own speed).
+	var fan_half := Vector2(total, CARD_H) * 0.5
+	var group := Control.new()
+	group.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	group.z_index = 5
+	group.pivot_offset = fan_half           # scale/breathe around the fan centre
+	add_child(group)
+	var aura := _make_aura(Vector2(total, CARD_H))   # behind the cards
+	aura.z_index = 0
+	aura.modulate.a = 0.0
+	group.add_child(aura)
+	for i in n:
+		var c := _make_card(cards[i][0], cards[i][1])
+		c.position = Vector2(i * step, 0.0)
+		c.z_index = 1                               # keep the fan in front of the aura glow
+		group.add_child(c)
+	# Form the combo SMALL, centred over the player's seat (stays on-screen for side
+	# seats); it grows to full size as it flies, keeping centre on `origin`.
+	group.scale = Vector2.ONE * AN_TRANG_SMALL
+	group.position = origin - fan_half
+	# Glow the aura in and breathe it (bound to the aura, so freeing kills the loop).
+	create_tween().tween_property(aura, "modulate:a", 1.0, 0.3)
+	var pulse := aura.create_tween().set_loops()
+	pulse.tween_property(aura, "scale", Vector2.ONE * 1.06, 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	pulse.tween_property(aura, "scale", Vector2.ONE, 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	# Fly the whole group straight to the table (no sit).
+	var fly := create_tween()
+	fly.set_parallel(true)
+	fly.tween_property(group, "position", Vector2(startx, ty), AN_TRANG_FLY) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	fly.tween_property(group, "scale", Vector2.ONE, AN_TRANG_FLY) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	await fly.finished
+	if g != _gen:
+		group.queue_free()
+		return []
+	return [group]
+
+## The avatar's soft glow, supercharged: a StyleBoxFlat with an invisible box and a
+## big, bright blurred shadow (the active avatar uses ember alpha 0.12–0.32, size
+## 8–14; this is gold, alpha ~0.9, size ~48). `rect` is the card-fan footprint it hugs.
+func _make_aura(rect: Vector2) -> Panel:
+	var sb := StyleBoxFlat.new()
+	sb.anti_aliasing = false
+	sb.bg_color = Color(Palette.GOLD_HI, 0.0)        # invisible box; only the glow shows
+	sb.set_corner_radius_all(20)
+	sb.shadow_color = Color(Palette.GOLD_HI, 0.9)    # strong (avatar tops out ~0.32)
+	sb.shadow_size = 48                              # big soft halo (avatar is 8–14)
+	var p := Panel.new()
+	p.add_theme_stylebox_override("panel", sb)
+	p.size = rect
+	p.pivot_offset = rect * 0.5
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.z_index = 4
+	return p
+
+## Fade out the currently-resting ĂN TRẮNG combo + aura (when a stronger one lands).
+func _fade_aura() -> void:
+	var nodes := _aura_nodes
+	_aura_nodes = []
+	for node in nodes:
+		if is_instance_valid(node):
+			var tw := create_tween()
+			tw.tween_property(node, "modulate:a", 0.0, PILE_FADE)
+			tw.finished.connect(node.queue_free)
+
+## Drop the ĂN TRẮNG combo + aura immediately (called on the next deal).
+func _clear_aura() -> void:
+	for node in _aura_nodes:
+		if is_instance_valid(node):
+			node.queue_free()
+	_aura_nodes.clear()
+
 ## A chặt (chop) just landed: pop a transient +amount / -amount over the chopper
 ## and the chopped seat (synced to the bombing cards landing) and tick both seats'
 ## money to the new balances.
@@ -577,8 +735,10 @@ func _fade_out_win() -> void:
 	var nodes: Array = []
 	nodes.append_array(_revealed)
 	nodes.append_array(_pops)
+	nodes.append_array(_aura_nodes)
 	_revealed.clear()
 	_pops.clear()
+	_aura_nodes.clear()
 	for n in nodes:
 		if is_instance_valid(n):
 			var tw := create_tween()
@@ -814,9 +974,11 @@ func _make_card(row: int, col: int, width: float = HAND_W) -> Card:
 ## At match end, lay each opponent's remaining hand face-up as a small vertical
 ## stack under their avatar, so you can see what they were holding. Cleared on the
 ## next deal. (Seat 0 is the human, whose own fan already shows their cards.)
-func _reveal_opponent_hands(data: GameStateData) -> void:
+func _reveal_opponent_hands(data: GameStateData, skip: int = -1) -> void:
 	_clear_revealed()
 	for p in [1, 2, 3]:
+		if p == skip:
+			continue
 		var hand: Array = (data.hands[p] as Array).duplicate()
 		if hand.is_empty():
 			continue
@@ -841,6 +1003,13 @@ func _clear_revealed() -> void:
 		if is_instance_valid(c):
 			c.queue_free()
 	_revealed.clear()
+
+## Is the [row, col] card present in `list`?
+func _card_in(list: Array, card: Array) -> bool:
+	for c in list:
+		if c[0] == card[0] and c[1] == card[1]:
+			return true
+	return false
 
 ## Sâm Lốc rank order (3<4<…<K<A<2). Sheet cols: 0=A, 1=2, 2=3 … 12=K.
 func _rank(col: int) -> int:

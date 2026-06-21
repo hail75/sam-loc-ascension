@@ -15,23 +15,30 @@ extends RefCounted
 ## deuce and end no higher than an ace (no wrap past the ace). Leading (an empty
 ## table) any valid combo is legal. Passing/timing out folds you for the trick.
 ##
+## ĂN TRẮNG (instant win on the deal): some dealt hands win on the spot (deuces
+## allowed) — strongest to weakest: three triplets > ten-card straight > five pairs >
+## ten-card single-colour flush > quad of deuces. Detected right after the deal (see
+## `an_trang_tier` / `an_trang_plays`); the strongest holder wins. Each loser pays
+## AN_TRANG_PER + their own 2/quad penalty (see `settle`).
+##
 ## FINISHING ON A DEUCE IS A FOUL (thối 2): a play that empties your hand while still
 ## holding a 2 is allowed, but you DON'T win — the deal ends, you forfeit the pot and
 ## pay FINISH_TWO_STAKE to each other player (during báo sâm it fails the declaration).
 ## Shed your 2s before the final play to actually win.
 ##
-## BLOCK OBLIGATION (đền): when you LEAD a fresh trick and the player on your left
-## holds exactly one card, you must lead your single highest card. Failing to (any
-## other lead) is a soft violation — not rejected, just flagged. If that one-card
-## neighbour then WINS the deal, you pay the đền penalty (see `settle`).
+## ĐỀN (block obligation): you đền only when BOTH hold — (1) you play a single that
+## ISN'T your highest (you still hold a higher single), and (2) the player with one
+## card left beats exactly that single to go out INSTANTLY right after. You then pay
+## the đền penalty (see `settle`). Playing your highest single — or leading a combo,
+## or any play the one-card player can't instantly beat — never đền.
 ##
 ## MONEY (winner-takes-all, all amounts are multiples of STAKE coins):
 ##   - Normal deal: the winner takes the whole pot — every loser pays 1 stake per
 ##     card still in hand, plus SPECIAL_STAKE per leftover 2 or quad. A móm loser who
 ##     never played a card (full HAND_SIZE hand) pays MOM_STAKE extra on the cards.
-##   - Đền: an offender who broke the block obligation toward the winner pays their
-##     own normal-loss amount to EACH other loser. Settled as a separate beat (the
-##     `feed` array from `settle`) just before the pot itself.
+##   - Đền: the offender (see ĐỀN above) pays their own normal-loss amount to EACH
+##     other loser. Settled as a separate beat (the `feed` array from `settle`) just
+##     before the pot itself.
 ##   - Thối 2 (foul finish): no pot is won — the fouler pays FINISH_TWO_STAKE to EACH
 ##     other player (also via `feed`); no winner-takes-all settle that deal.
 ##   - Báo sâm: the declarer wins/pays BAO_SAM_PER per opponent (see `settle`).
@@ -56,9 +63,18 @@ const CHOP_STAKE := 15
 ## Stake units a "thối 2" fouler (who emptied their hand on a play holding a deuce)
 ## pays to EACH other player. They forfeit the win.
 const FINISH_TWO_STAKE := 15
+## Stake units each opponent pays the ĂN TRẮNG (instant-win) winner, ON TOP of their
+## own 2/quad penalty (SPECIAL_STAKE per leftover 2/quad — every card is "leftover").
+const AN_TRANG_PER := 20
 
 ## Combo kinds. Order/values are internal; compare only within the same kind.
 enum Combo { INVALID, SINGLE, PAIR, TRIPLE, QUAD, STRAIGHT, DOUBLE_QUAD }
+
+## ĂN TRẮNG — a dealt hand that wins on the spot (deuces allowed). Tiers, weakest to
+## strongest; a higher value beats a lower one when more than one player qualifies:
+##   1 quad of deuces · 2 ten-card single-colour flush · 3 five pairs ·
+##   4 ten-card straight · 5 three triplets.
+enum AnTrang { NONE, QUAD_TWOS, FLUSH, FIVE_PAIRS, TEN_STRAIGHT, THREE_TRIPLES }
 
 ## Sâm Lốc single-rank of a [row, col] card. Sheet cols: 0=A, 1=2, 2=3 … 12=K.
 ## Order: 3 (low) … 10, J, Q, K, A, 2 (high).
@@ -78,6 +94,8 @@ static func rank(card: Array) -> int:
 ##    held one) pays their own normal-loss amount to EACH other loser. Empty (all
 ##    zero) when nobody owed it.
 ##  * `deltas` — the pot itself:
+##     - ĂN TRẮNG (instant win on the deal): each loser pays AN_TRANG_PER + their own
+##       2/quad penalty; the winner sweeps it. Supersedes everything below.
 ##     - Báo sâm declared: the declarer wins/pays BAO_SAM_PER PER opponent (success →
 ##       +per each, +3·per total; failure → −per each, −3·per total).
 ##     - Otherwise: each loser pays 1 stake per card left + SPECIAL_STAKE per leftover
@@ -90,6 +108,19 @@ static func settle(state: GameStateData) -> Dictionary:
 	for _p in NUM_PLAYERS:
 		deltas.append(0)
 		feed.append(0)
+	# ĂN TRẮNG (instant win on the deal) supersedes everything: each loser pays
+	# AN_TRANG_PER + their own 2/quad penalty; the winner sweeps it.
+	if state.an_trang_winner != -1:
+		var w := state.an_trang_winner
+		var total := 0
+		for p in NUM_PLAYERS:
+			if p == w:
+				continue
+			var amt := (AN_TRANG_PER + _special_count(state.hands[p]) * SPECIAL_STAKE) * STAKE
+			deltas[p] = -amt
+			total += amt
+		deltas[w] = total
+		return {"feed": feed, "deltas": deltas}
 	if state.bao_sam != -1:
 		var success := not state.bao_sam_failed
 		var per := BAO_SAM_PER * STAKE
@@ -117,12 +148,11 @@ static func settle(state: GameStateData) -> Dictionary:
 		deltas[p] = -pen
 		pot += pen
 	deltas[state.winner] = pot
-	# Đền: if the winner's right-hand neighbour failed the "lead your highest while I
-	# hold one card" duty toward the winner, that offender pays their own normal-loss
-	# amount to EACH OTHER loser (everyone but the winner and themselves).
-	if state.winner != -1 and not state.block_violated.is_empty() \
-			and state.block_violated[state.winner]:
-		var feeder := (state.winner - 1 + NUM_PLAYERS) % NUM_PLAYERS
+	# Đền: the player whose single the winner beat to go out instantly, while still
+	# holding a higher single (set as `den_feeder` on the winning play), pays their own
+	# normal-loss amount to EACH OTHER loser (everyone but the winner and themselves).
+	if state.den_feeder != -1:
+		var feeder := state.den_feeder
 		var pen := _loss_penalty(state.hands[feeder])
 		for L in NUM_PLAYERS:
 			if L == state.winner or L == feeder:
@@ -164,6 +194,80 @@ static func _special_count(hand: Array) -> int:
 			n += 1
 	return n
 
+## The ĂN TRẮNG tier of a freshly-dealt hand (see AnTrang), or NONE. Checked strongest
+## first so the best qualifying combo is returned. Deuces are allowed in any of these.
+static func an_trang_tier(hand: Array) -> int:
+	if hand.size() != HAND_SIZE:
+		return AnTrang.NONE
+	var buckets := _buckets(hand)
+	# Three triplets: three or more ranks each holding 3+ cards.
+	var triples := 0
+	for col in buckets:
+		if buckets[col].size() >= 3:
+			triples += 1
+	if triples >= 3:
+		return AnTrang.THREE_TRIPLES
+	# Ten-card straight: the whole hand is one run.
+	if classify(hand).type == Combo.STRAIGHT:
+		return AnTrang.TEN_STRAIGHT
+	# Five pairs: every rank appears an even number of times, so all 10 cards pair up.
+	var all_paired := true
+	for col in buckets:
+		if buckets[col].size() % 2 != 0:
+			all_paired = false
+			break
+	if all_paired:
+		return AnTrang.FIVE_PAIRS
+	# Ten same-colour flush: every card the same colour (rows 0–1 red, 2–3 black).
+	var flush := true
+	var color := _card_color(hand[0])
+	for c in hand:
+		if _card_color(c) != color:
+			flush = false
+			break
+	if flush:
+		return AnTrang.FLUSH
+	# Quad of deuces.
+	if buckets.has(1) and buckets[1].size() == 4:
+		return AnTrang.QUAD_TWOS
+	return AnTrang.NONE
+
+## Red (0) for hearts/diamonds (rows 0–1), black (1) for spades/clubs (rows 2–3).
+static func _card_color(card: Array) -> int:
+	return 0 if card[0] <= 1 else 1
+
+## Every player holding an ĂN TRẮNG combo, as { player, tier }, sorted WEAKEST tier
+## first — the animation order; the last (strongest) is the instant winner. Empty if
+## nobody qualifies.
+static func an_trang_plays(state: GameStateData) -> Array:
+	var out: Array = []
+	for p in NUM_PLAYERS:
+		var tier := an_trang_tier(state.hands[p])
+		if tier != AnTrang.NONE:
+			out.append({"player": p, "tier": tier})
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a["tier"] < b["tier"])
+	return out
+
+## The actual cards that make up the ĂN TRẮNG combo, for the fly-out — only the
+## triplet cards / the four 2s for those tiers, the whole hand for the rest (straight,
+## five pairs, flush all use all ten).
+static func an_trang_cards(hand: Array, tier: int) -> Array:
+	var out: Array = []
+	match tier:
+		AnTrang.THREE_TRIPLES:
+			var buckets := _buckets(hand)
+			for col in buckets:
+				if buckets[col].size() >= 3:
+					out.append_array(buckets[col])
+			return out
+		AnTrang.QUAD_TWOS:
+			for c in hand:
+				if c[1] == 1:
+					out.append(c)
+			return out
+		_:
+			return hand.duplicate(true)
+
 ## Deal a fresh match: 10 cards each. `first` leads (the previous match's winner;
 ## defaults to player 0 for the very first match).
 static func deal(rng: RandomNumberGenerator, first: int = 0) -> GameStateData:
@@ -172,7 +276,6 @@ static func deal(rng: RandomNumberGenerator, first: int = 0) -> GameStateData:
 	for _p in NUM_PLAYERS:
 		s.hands.append([])
 		s.passed.append(false)
-		s.block_violated.append(false)
 	for p in NUM_PLAYERS:
 		for _i in HAND_SIZE:
 			s.hands[p].append(deck.pop_back())
@@ -327,16 +430,6 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 		if idx == -1:
 			return _fail(state, "card not in hand")
 		hand.remove_at(idx)
-	# Block obligation (đền): whenever the player on your left holds exactly one card
-	# (and a single is in play — leading, or answering a single), you must play your
-	# single highest card. Playing anything else flags you against that neighbour; if
-	# they go on to win the deal, you pay the đền penalty in settle. Soft rule — the
-	# play is NOT rejected, only flagged, and the flag tracks your LATEST such action
-	# (overwritten each turn). (Read pre-play state — before this play removed cards.)
-	var nseat := _block_target(state, p)
-	if nseat != -1:
-		ns.block_violated[nseat] = not _is_highest_single(state.hands[p], cards)
-
 	# Chặt: if this play bombs the table's 2/quad, record the side-payment and
 	# escalate the chop chain (next chop in the trick pays a level higher).
 	var chops: Array = []
@@ -375,6 +468,15 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 	if hand.is_empty():
 		ns.finished = true
 		ns.winner = p
+		# Đền: the winner went out on their last card — a single — by beating the single
+		# someone else just put down. If that someone still holds a HIGHER single, they
+		# failed to "play their highest" and the win landed instantly on them: they đền.
+		if cards.size() == 1 and state.table_owner != -1 and state.table_owner != p:
+			var played_rank := rank(state.table[0])
+			for c in state.hands[state.table_owner]:
+				if rank(c) > played_rank:
+					ns.den_feeder = state.table_owner
+					break
 		return {"ok": true, "state": ns, "reason": "", "chops": chops}
 
 	# If everyone else has already folded — or the play is intrinsically unbeatable
@@ -408,29 +510,6 @@ static func _chop_count(table: Array, cards: Array) -> int:
 		return 1
 	return 0
 
-## The left-hand neighbour `p` owes the block obligation to this turn, or -1. It
-## fires only when that neighbour holds exactly one card AND a single is in play
-## (the table is empty — a lead — or a single), since that's the only spot where a
-## single high card actually blocks their win.
-static func _block_target(state: GameStateData, p: int) -> int:
-	var nseat := (p + 1) % NUM_PLAYERS
-	if state.hands[nseat].size() != 1:
-		return -1
-	if not state.table.is_empty() and classify(state.table).type != Combo.SINGLE:
-		return -1
-	return nseat
-
-## Is `play` exactly the single highest-ranked card in `hand`? (Used by the block
-## obligation: a compliant lead while the next player holds one card.) Ties on the
-## top rank are fine — any card of the top rank counts.
-static func _is_highest_single(hand: Array, play: Array) -> bool:
-	if play.size() != 1:
-		return false
-	var hi := -1
-	for c in hand:
-		hi = maxi(hi, rank(c))
-	return rank(play[0]) == hi
-
 ## True if any card in `cards` is a deuce (col 1).
 static func _has_two(cards: Array) -> bool:
 	for c in cards:
@@ -461,11 +540,6 @@ static func _is_unbeatable(table: Array) -> bool:
 
 static func _pass(state: GameStateData, p: int) -> Dictionary:
 	var ns := state.clone()
-	# Block obligation: passing while your left neighbour holds one card (in a single
-	# spot) is a failure to lead your highest — flag it (overwrites your latest action).
-	var nb := _block_target(state, p)
-	if nb != -1:
-		ns.block_violated[nb] = true
 	# A báo sâm declarer only ever acts on their own (empty) lead; passing there
 	# means abandoning the open right — the declaration fails immediately.
 	if ns.bao_sam == p and ns.table.is_empty():
@@ -554,9 +628,10 @@ static func _lead(hand: Array, opp_min: int, my_n: int, next_n: int) -> Array:
 	# Win now: the whole hand is one legal combo and isn't an illegal deuce finish.
 	if is_valid(hand) and not _has_two(hand):
 		return hand.duplicate(true)
-	# Block obligation (đền): the player on our left holds exactly one card. We MUST
-	# lead our single highest card (the bot always adheres) or eat the đền penalty if
-	# they win. Skip only if that highest single would be an illegal deuce finish.
+	# Đền avoidance: the next player holds one card, so any single we lead, they may
+	# beat to win instantly. Lead our HIGHEST single — đền only bites a single that
+	# wasn't your highest, so leading the top one is always safe. (Skip only if that
+	# highest single would be a foul deuce finish.)
 	if next_n == 1:
 		var top := _highest_single(hand)
 		if not top.is_empty() and not _illegal_finish(hand, [top]):
@@ -585,9 +660,9 @@ static func _respond(table: Array, hand: Array, opp_min: int, my_n: int, next_n:
 	for pl in legal:
 		if pl.size() == my_n:
 			return pl
-	# Block obligation (đền): the player on our left holds one card and the table is a
-	# single — adhere by beating it with our highest single if we can (the bot always
-	# plays its top card here rather than a weak one and eating the penalty).
+	# Đền avoidance: the next player holds one card and the table is a single they
+	# might beat to win instantly — answer with our HIGHEST single if it beats, so we
+	# never get caught having held a higher one back (which is what đền punishes).
 	if next_n == 1 and classify(table).type == Combo.SINGLE:
 		var top := _highest_single(hand)
 		if not top.is_empty() and beats(table, [top]) and not _illegal_finish(hand, [top]):

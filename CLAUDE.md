@@ -33,8 +33,8 @@ make that migration painless:
   reason}`. Also holds an **offline-only reference bot** (`find_play`) — a heuristic, NOT
   authoritative rules; the future server drives real players instead.
 - `rules/game_state_data.gd` — `GameStateData` (RefCounted): plain serialisable match state
-  (`hands, current, table, table_owner, passed, bao_sam, chop_level, block_violated,
-  foul_finish, finished, winner`) + `clone()`. No behaviour.
+  (`hands, current, table, table_owner, passed, bao_sam, chop_level, den_feeder,
+  foul_finish, an_trang_winner, finished, winner`) + `clone()`. No behaviour.
 - `rules/deck.gd` — `Deck`: pure shuffled-deck helper.
 - `autoload/game_state.gd` — `GameState` autoload: the single runtime path. Holds the live
   `GameStateData`, routes every action through `SamLocRules.apply`, emits signals
@@ -57,19 +57,30 @@ make that migration painless:
   **THỐI**). Shed your 2s before the final play to actually win. During **báo sâm**, fouling
   on a 2 **fails the declaration** (báo sâm failure scoring applies; still captioned THỐI).
   Bots avoid fouling, taking it only when no other lead exists.
-- **Block obligation (đền):** whenever the player on your left holds exactly **one card**
-  and a single is in play (you're **leading**, or answering a **single** — the only spot a
-  single high card can block their win), you must play your **single highest card**. Playing
-  anything else (or passing) is a *soft* violation (NOT rejected — you're allowed to, you
-  just risk the penalty): if that one-card neighbour goes on to **win** the deal, you "đền" —
-  pay your own normal-loss amount to **each other loser** (everyone but the winner and you).
-  Tracked via `block_violated` (overwritten by your latest such action); settled as the
-  `feed` array from `settle`, popped as its own +/- beat *before* the pot. **Bots always
-  adhere** (they play their highest single in this spot).
+- **Đền (block obligation):** you "đền" **only** when BOTH conditions hold — (1) you play a
+  single that **isn't your highest** (you still hold a higher single), and (2) the player
+  with **one card left** beats *exactly that single* to go out **instantly, right after** you
+  play it. Then you pay your own normal-loss amount to **each other loser** (everyone but the
+  winner and you). Determined precisely at the winning play (`den_feeder` = the player whose
+  single was beaten while holding a higher one); settled as the `feed` array from `settle`,
+  popped as its own +/- beat *before* the pot, captioned **ĐỀN**. Playing your highest single,
+  leading a combo, or any play the one-card player can't instantly beat — **never** đền.
+  **Bots avoid it** by always answering/leading with their highest single when the next
+  player holds one card.
 - **Straights** run `A,2,3,…,10,J,Q,K,A` — may start on an ace or a deuce, end no higher than
   an ace, no wrap past the ace.
 - **Trick / fold:** pass or timeout folds you for the rest of the trick (locked out until a
   new trick is led). Timeout == auto-pass. The previous match's winner leads the next deal.
+- **Ăn trắng (instant win on the deal):** some dealt hands win on the spot (deuces allowed),
+  ranked strongest→weakest: **3 triplets > 10-card straight > 5 pairs > 10-card single-colour
+  flush (red rows 0–1 / black rows 2–3) > quad of deuces**. Checked right after dealing
+  (`an_trang_tier`/`an_trang_plays`); if anyone qualifies, all buttons/timers freeze, each
+  qualifying combo flies to the table in a **golden aura** (weakest first, strongest last),
+  the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Scoring (like báo sâm): each
+  loser pays **20 stake + their own 2/quad penalty** (5 per leftover 2/quad), winner sweeps
+  it. Money is deferred to `GameState.commit_an_trang()` (called at the +/- beat) so the deal
+  shows pre-win balances. **DEBUG:** `GameState.AN_TRANG_DEBUG` forces Vayne (seat 2) to hold
+  the four 2s every deal — turn OFF for real play.
 - **Báo sâm (the namesake ritual):** before each deal there's a claim window. A player may
   declare *báo sâm* to grab the open right and lead; they must then win every trick
   **unblocked** (run the whole hand). Success → +20 stake from each opponent (+60 stake

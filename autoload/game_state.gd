@@ -20,6 +20,11 @@ signal match_ended(winner: int, deltas: Array, feed: Array, balances: Array, dat
 
 const START_BALANCE := 8080
 
+## DEBUG: force Vayne (seat 2) to hold the four 2s every deal, so the ĂN TRẮNG
+## (instant-win) flow fires every match. Turn OFF for real play.
+const AN_TRANG_DEBUG := false
+const AN_TRANG_DEBUG_SEAT := 2
+
 var data: GameStateData
 var balances: Array = []          # persistent per-player money, survives re-deals
 var _last_winner := 0             # leads the next deal; player 0 for match one
@@ -33,7 +38,51 @@ func _ready() -> void:
 ## Start (or restart) a match and deal fresh hands; last match's winner leads.
 func new_match() -> void:
 	data = SamLocRules.deal(_rng, _last_winner)
+	if AN_TRANG_DEBUG:
+		_debug_force_quad_deuces(AN_TRANG_DEBUG_SEAT)
+	# ĂN TRẮNG: if anyone was dealt an instant-win hand, the strongest wins on the spot.
+	# Set up the win now (so the table can animate it) but defer the money to
+	# commit_an_trang(), called once the table reaches the +/- beat.
+	var plays := SamLocRules.an_trang_plays(data)
+	if not plays.is_empty():
+		var w: int = plays.back()["player"]
+		data.an_trang_winner = w
+		data.winner = w
+		data.finished = true
+		_last_winner = w
 	dealt.emit(data)
+
+## Apply the deferred ĂN TRẮNG settle to balances; returns { deltas, balances } for
+## the table's +/- pops. Call exactly once, when the win beat is shown.
+func commit_an_trang() -> Dictionary:
+	var s := SamLocRules.settle(data)
+	var deltas: Array = s["deltas"]
+	for i in deltas.size():
+		balances[i] += deltas[i]
+	return {"deltas": deltas, "balances": balances.duplicate()}
+
+## DEBUG helper: rebuild the hands so `seat` holds all four 2s. The 52-card deck only
+## deals 40, so some 2s may be undealt — inject all four explicitly (col 1, every
+## suit) and fill from the dealt NON-deuce cards. Keeps every hand at HAND_SIZE.
+func _debug_force_quad_deuces(seat: int) -> void:
+	var deuces: Array = [[0, 1], [1, 1], [2, 1], [3, 1]]
+	var pool: Array = []
+	for p in SamLocRules.NUM_PLAYERS:
+		for c in data.hands[p]:
+			if c[1] != 1:
+				pool.append(c)
+	var hands: Array = []
+	for _p in SamLocRules.NUM_PLAYERS:
+		hands.append([])
+	hands[seat].append_array(deuces)
+	for _i in (SamLocRules.HAND_SIZE - deuces.size()):
+		hands[seat].append(pool.pop_back())
+	for p in SamLocRules.NUM_PLAYERS:
+		if p == seat:
+			continue
+		for _i in SamLocRules.HAND_SIZE:
+			hands[p].append(pool.pop_back())
+	data.hands = hands
 
 func play(player: int, cards: Array) -> bool:
 	return _commit({"type": "play", "player": player, "cards": cards})

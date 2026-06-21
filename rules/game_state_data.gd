@@ -18,10 +18,12 @@ var bao_sam_failed: bool = false  # set if the declaration was broken (declarer'
 var chop_level: int = 0      # depth of the current trick's chop (chặt) chain: 0 =
                              # no chop yet, 1 = first chop, 2 = a chop of that chop,
                              # … — each level multiplies the chặt payment
-var block_violated: Array = []   # NUM_PLAYERS bools: did this player's right-hand
-                             # neighbour fail the "lead your highest when I hold one
-                             # card" duty toward them? If this player then WINS, the
-                             # offending neighbour pays the đền penalty in settle.
+var an_trang_winner: int = -1  # player who instant-won on the deal (ĂN TRẮNG); set
+                             # before any play. -1 = no instant win this deal.
+var den_feeder: int = -1     # set on the winning play: the player whose single the
+                             # 1-card winner just beat to go out, IF that single wasn't
+                             # their highest (they still held a higher one). They pay the
+                             # đền penalty in settle. -1 = nobody owes it.
 var foul_finish: int = -1    # player who ended on a deuce ("thối 2"): they DON'T win
                              # and pay the foul penalty. -1 = no foul this deal.
 var finished: bool = false
@@ -39,7 +41,8 @@ func clone() -> GameStateData:
 	s.bao_sam = bao_sam
 	s.bao_sam_failed = bao_sam_failed
 	s.chop_level = chop_level
-	s.block_violated = block_violated.duplicate()
+	s.an_trang_winner = an_trang_winner
+	s.den_feeder = den_feeder
 	s.foul_finish = foul_finish
 	s.finished = finished
 	s.winner = winner
