@@ -9,6 +9,15 @@ extends Control
 
 const CardScene: PackedScene = preload("res://scenes/card/card.tscn")
 const DECK_TEX: Texture2D = preload("res://assets/cards/deck_stack.png")
+## Dark-fantasy combo splash sheets: a horizontal strip of equal cells, played as a
+## cinematic when that combo is dealt. "TỨ QUÝ 2" (quad of deuces) — a golden knight.
+const TUQUY2_TEX: Texture2D = preload("res://assets/splash/tuquy2.png")
+const TUQUY2_FRAMES := 16
+const TUQUY2_CELL := Vector2(127, 127)
+## "SẢNH RỒNG" (ten-card straight) — a winged dragon-knight, cropped on all sides.
+const SANHRONG_TEX: Texture2D = preload("res://assets/splash/sanhrong.png")
+const SANHRONG_FRAMES := 16
+const SANHRONG_CELL := Vector2(200, 200)
 ## Deck thinning states, full -> single card, stepped through as it deals.
 const DECK_STATES: Array[Texture2D] = [
 	preload("res://assets/cards/deck_stack.png"),
@@ -42,6 +51,12 @@ const FLY_TIME := 0.32                      # play-to-centre flight
 const AN_TRANG_HOLD := 2.0                    # suspense beat after the deal before the ĂN TRẮNG reveal
 const AN_TRANG_FLY := 1.1                    # slow, dramatic ĂN TRẮNG instant-win flight
 const AN_TRANG_SMALL := 0.4                  # combo forms small over the seat, grows as it flies
+const SPLASH_DIM := 0.78                      # combo-splash dim-overlay opacity
+const SPLASH_IN := 2.6                        # splash slide-up + fade in (very slow, dramatic)
+const SPLASH_FPS := 4.0                       # combo-splash playback speed (slow)
+const SPLASH_OUT := 0.9                       # splash fade out (slow), ends as the anim ends
+const SPLASH_SHAKE_TIME := 0.7               # earthquake duration as the splash crashes in
+const SPLASH_SHAKE_AMP := 22.0               # earthquake peak offset (decays to 0)
 const WIN_PAUSE := 5.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
 const FEED_PAUSE := 1.2                     # hold on the đền (block-penalty) pops before the normal settle pops
 const WIN_FADE := 0.45                      # the reveal cards + amount pops ease out before the next deal
@@ -56,14 +71,30 @@ const FLIP_TIME := 0.16                     # your cards flipping face-up
 @onready var _play_btn: PixelButton = $PlayButton
 @onready var _pass_btn: PixelButton = $PassButton
 
-# Player index -> seat. Indices ascend counter-clockwise from the player:
-# 0 YOU (bottom) -> 1 (right) -> 2 (top) -> 3 (left).
-@onready var _seats: Dictionary = {
-	0: $SeatYou,
-	1: $SeatGrimwald,
-	2: $SeatVayne,
-	3: $SeatSeraphine,
-}
+# The four fixed seat NODES by screen position (you bottom, Grimwald right, Vayne top,
+# Seraphine left). `_relayout` always positions these by their fixed spot.
+@onready var _seat_you: Seat = $SeatYou
+@onready var _seat_grim: Seat = $SeatGrimwald
+@onready var _seat_vayne: Seat = $SeatVayne
+@onready var _seat_sera: Seat = $SeatSeraphine
+# Engine player index -> seat node, rebuilt each deal for the live player count. As bots
+# bust the table shrinks: 4p uses all (natural CCW: you, right, top, left); 3p drops the
+# TOP (Vayne); 2p also drops the LEFT (Seraphine).
+var _seats: Dictionary = {}
+
+## Map the live players (0..n-1) onto seat nodes for `n` players; hide the rest.
+func _build_seat_map(n: int) -> void:
+	var order: Array
+	match n:
+		4: order = [_seat_you, _seat_grim, _seat_vayne, _seat_sera]
+		3: order = [_seat_you, _seat_grim, _seat_sera]   # top (Vayne) removed
+		_: order = [_seat_you, _seat_grim]               # 2: top + left removed
+	for nd in [_seat_you, _seat_grim, _seat_vayne, _seat_sera]:
+		nd.visible = false
+	_seats = {}
+	for i in order.size():
+		_seats[i] = order[i]
+		order[i].visible = true
 
 const POP_FONT: Font = preload("res://assets/fonts/dearpix.ttf")
 const NUM_FONT: Font = preload("res://assets/fonts/Pixelta.ttf")  # numerals: the +/- balance pop
@@ -93,11 +124,13 @@ func _ready() -> void:
 	# Set the button copy/size here (not just in the .tscn) so it survives the
 	# Godot editor re-saving the scene over our changes.
 	_play_btn.text = "ĐÁNH"
+	_play_btn.variant = PixelButton.Variant.GOLD
 	_play_btn.font_size = 54
 	_pass_btn.text = "THÔI"
 	_pass_btn.font_size = 54
 	# Player seat label in code too (survives the editor re-saving the .tscn).
-	_seats[0].hero_name = "BẠN"
+	_seat_you.hero_name = "BẠN"
+	_build_seat_map(GameState.num_players)   # initial mapping; rebuilt each deal
 	_play_btn.pressed.connect(_on_play)
 	_pass_btn.pressed.connect(_on_pass)
 	GameState.dealt.connect(_on_dealt)
@@ -147,6 +180,9 @@ func _warn(text: String) -> void:
 func _on_dealt(data: GameStateData) -> void:
 	_gen += 1
 	var g := _gen
+	# Re-map seats for the live player count (a bot may have busted) and re-fit layout.
+	_build_seat_map(data.hands.size())
+	_relayout()
 	# Reset the table to empty and hide the count badges while we deal.
 	last_played = []
 	_rebuild_last_played()
@@ -164,7 +200,10 @@ func _on_dealt(data: GameStateData) -> void:
 	# The action button advertises the upcoming claim while dealing (greyed-out
 	# BÁO SÂM, not ĐÁNH), since the báo sâm window comes before any normal turn.
 	_play_btn.text = "BÁO SÂM"
+	_play_btn.variant = PixelButton.Variant.EMBER   # amber, so it's not mistaken for ĐÁNH
 	_pass_btn.text = "THÔI"
+	_play_btn.visible = true   # restore if a prior ĂN TRẮNG hid them
+	_pass_btn.visible = true
 	_set_my_turn(false)
 	_chrome.banner_text = "ĐANG CHIA BÀI"
 
@@ -202,11 +241,14 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 	var hand_start := (_vw() - hand_total) * 0.5
 	var your_backs: Array = []
 	var hi := 0
-	var total := SamLocRules.HAND_SIZE * SamLocRules.NUM_PLAYERS
+	var total := SamLocRules.HAND_SIZE * data.hands.size()
+	# Fewer players deal fewer cards, so thin the deck through fewer stack states:
+	# 4p = 5, 3p = 4, 2p = 3 (capped at the textures we have).
+	var deck_states := mini(data.hands.size() + 1, DECK_STATES.size())
 	var dealt := 0
 
 	for _round in SamLocRules.HAND_SIZE:
-		for p in [0, 1, 2, 3]:
+		for p in data.hands.size():
 			if g != _gen:
 				return
 			var back := _make_back()
@@ -242,7 +284,7 @@ func _deal_animation(data: GameStateData, g: int) -> void:
 					.set_delay(DEAL_FLIGHT * 0.5).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 			# Thin the pile as it empties: step full -> single across the deal.
 			dealt += 1
-			_deck_apply(DECK_STATES[mini(dealt * DECK_STATES.size() / total, DECK_STATES.size() - 1)])
+			_deck_apply(DECK_STATES[mini(dealt * deck_states / total, deck_states - 1)])
 			await get_tree().create_timer(DEAL_STAGGER).timeout
 
 	if g != _gen:
@@ -359,13 +401,44 @@ func _start_turn(data: GameStateData) -> void:
 
 	if data.current == 0:
 		_set_my_turn(true)
+		# Đền obligation: the player to your left holds ONE card — you can't pass, you
+		# must play (and should play your highest). Grey out THÔI. (Timeout auto-plays.)
+		var forced := _den_obligation(data)
+		if forced:
+			_pass_btn.disabled = true
 		var g := _gen
 		_turn_tween.finished.connect(func() -> void:
-			if g == _gen and _my_turn:
+			if g != _gen or not _my_turn:
+				return
+			if forced:
+				var pl := SamLocRules.find_play(GameState.data, 0)
+				if pl.is_empty():
+					_on_pass()
+				else:
+					GameState.play(0, pl)
+					_set_my_turn(false)
+			else:
 				_on_pass())
 	else:
 		_set_my_turn(false)
 		_schedule_bot(data, data.current)
+
+## True when it's your turn and the player who ACTS NEXT (the next active seat, after
+## any folds) holds exactly one card in a single context (you're leading, or answering
+## a single you CAN beat) — so you're obliged to play (no passing). Greys out THÔI.
+func _den_obligation(data: GameStateData) -> bool:
+	if data.current != 0 or data.bao_sam != -1:
+		return false
+	if data.hands[SamLocRules._next_active(data, 0)].size() != 1:
+		return false
+	if data.table.is_empty():
+		return true
+	if SamLocRules.classify(data.table).type != SamLocRules.Combo.SINGLE:
+		return false
+	for c in data.hands[0]:
+		if SamLocRules.beats(data.table, [c]):
+			return true
+	return false
 
 ## Single switch for "it's the player's turn": gates input and greys the buttons.
 func _set_my_turn(v: bool) -> void:
@@ -488,23 +561,38 @@ func _resolve_an_trang(data: GameStateData, g: int) -> void:
 		_turn_tween.kill()
 	for p in _seats:
 		_seats[p].active = false
-	# The confusing beat: the buttons LOOK live (ĐÁNH/THÔI, not greyed) but input is
-	# gated off, so taps silently do nothing — "wait, why can't I do anything?" — held
-	# for a moment before the instant-win reveal explains it.
+	# The confusing beat: input is gated off (taps do nothing). If YOU don't have the
+	# instant-win, both buttons flip to "CHẠY" (run!) — live-looking but inert, max
+	# confusion. If you ARE a holder, hide the buttons entirely (you've nothing to do).
 	_my_turn = false
-	_play_btn.text = "ĐÁNH"
-	_pass_btn.text = "THÔI"
-	_play_btn.disabled = false
-	_pass_btn.disabled = false
 	_chrome.banner_text = ""
+	var you_an_trang := SamLocRules.an_trang_tier(data.hands[0]) != SamLocRules.AnTrang.NONE
+	if you_an_trang:
+		_play_btn.visible = false
+		_pass_btn.visible = false
+	else:
+		_play_btn.text = "CHẠY"
+		_pass_btn.text = "CHẠY"
+		_play_btn.disabled = false
+		_pass_btn.disabled = false
 	await get_tree().create_timer(AN_TRANG_HOLD).timeout
 	if g != _gen:
 		return
-	# Reveal: now lock the controls down for real.
-	_play_btn.disabled = true
-	_pass_btn.disabled = true
+	# Reveal: hide the controls for the rest of the instant-win sequence.
+	_play_btn.visible = false
+	_pass_btn.visible = false
 	var plays := SamLocRules.an_trang_plays(data)
 	var winner: int = plays.back()["player"]
+	# Dark-fantasy combo splash for the winning combo (art exists for some tiers).
+	var wtier := int(plays.back()["tier"])
+	if wtier == SamLocRules.AnTrang.QUAD_TWOS:
+		await _play_combo_splash("TỨ QUÝ 2", TUQUY2_TEX, TUQUY2_FRAMES, TUQUY2_CELL, g)
+		if g != _gen:
+			return
+	elif wtier == SamLocRules.AnTrang.TEN_STRAIGHT:
+		await _play_combo_splash("SẢNH RỒNG", SANHRONG_TEX, SANHRONG_FRAMES, SANHRONG_CELL, g)
+		if g != _gen:
+			return
 	# Fly each combo in (only the combo cards — e.g. the four 2s, the triplet cards —
 	# not the whole hand), fading the previous one as the next (stronger) arrives.
 	for play in plays:
@@ -523,9 +611,7 @@ func _resolve_an_trang(data: GameStateData, g: int) -> void:
 		if g != _gen:
 			return
 	_chrome.banner_text = "%s ĂN TRẮNG" % _seats[winner].hero_name
-	# Reveal the losers' hands (the winner's combo is already on the table).
-	_reveal_opponent_hands(data, winner)
-	# Settle the deferred payout and pop the +/- amounts (THỐI caption for any 2/quad).
+	# Settle the deferred payout and pop the flat +/- amounts (20 stake each, like báo sâm).
 	var res := GameState.commit_an_trang()
 	var deltas: Array = res["deltas"]
 	var balances: Array = res["balances"]
@@ -533,8 +619,6 @@ func _resolve_an_trang(data: GameStateData, g: int) -> void:
 		var gain: bool = deltas[p] >= 0
 		var text := "+%d" % deltas[p] if gain else str(deltas[p])
 		_pop_balance(_seats[p], text, POP_GOLD if gain else POP_GREY, gain)
-		if not gain and SamLocRules.loss_reasons(data.hands[p]).has("THỐI"):
-			_pop_reason(_seats[p], ["THỐI"], true)
 		_seats[p].balance = balances[p]
 	await get_tree().create_timer(WIN_PAUSE).timeout
 	if g != _gen:
@@ -566,6 +650,7 @@ func _an_trang_fly(player: int, cards: Array, g: int) -> Array:
 	group.add_child(aura)
 	for i in n:
 		var c := _make_card(cards[i][0], cards[i][1])
+		c.shadow = false                            # the aura is the glow; no drop shadow
 		c.position = Vector2(i * step, 0.0)
 		c.z_index = 1                               # keep the fan in front of the aura glow
 		group.add_child(c)
@@ -576,9 +661,9 @@ func _an_trang_fly(player: int, cards: Array, g: int) -> Array:
 	# Glow the aura in and breathe it (bound to the aura, so freeing kills the loop).
 	create_tween().tween_property(aura, "modulate:a", 1.0, 0.3)
 	var pulse := aura.create_tween().set_loops()
-	pulse.tween_property(aura, "scale", Vector2.ONE * 1.06, 0.7) \
+	pulse.tween_property(aura, "scale", Vector2.ONE * 1.025, 1.3) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	pulse.tween_property(aura, "scale", Vector2.ONE, 0.7) \
+	pulse.tween_property(aura, "scale", Vector2.ONE, 1.3) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	# Fly the whole group straight to the table (no sit).
 	var fly := create_tween()
@@ -601,8 +686,8 @@ func _make_aura(rect: Vector2) -> Panel:
 	sb.anti_aliasing = false
 	sb.bg_color = Color(Palette.GOLD_HI, 0.0)        # invisible box; only the glow shows
 	sb.set_corner_radius_all(20)
-	sb.shadow_color = Color(Palette.GOLD_HI, 0.9)    # strong (avatar tops out ~0.32)
-	sb.shadow_size = 48                              # big soft halo (avatar is 8–14)
+	sb.shadow_color = Color(Palette.GOLD_HI, 0.95)   # strong, concentrated
+	sb.shadow_size = 20                              # tighter halo (48 read too wide/diluted)
 	var p := Panel.new()
 	p.add_theme_stylebox_override("panel", sb)
 	p.size = rect
@@ -627,6 +712,162 @@ func _clear_aura() -> void:
 		if is_instance_valid(node):
 			node.queue_free()
 	_aura_nodes.clear()
+
+## A rounded box in a palette color, AA off so the corners stay pixel-crisp.
+func _round_panel(color: Color, radius: int) -> Panel:
+	var sb := StyleBoxFlat.new()
+	sb.anti_aliasing = false
+	sb.bg_color = color
+	sb.set_corner_radius_all(radius)
+	var p := Panel.new()
+	p.add_theme_stylebox_override("panel", sb)
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return p
+
+## The combo title in a FULL-WIDTH framed banner — palette frame style (dark OUTLINE
+## rim, GOLD trim, dark FRAME fill, nested like the table chrome). The title is drawn
+## (not a Label) so it's centred the same way as the rest of the game: gold fill, a
+## thin dark outline, and a drop shadow.
+const COMBO_BANNER_H := 128.0
+func _make_combo_banner(text: String) -> Control:
+	var bw := _vw()
+	var bh := COMBO_BANNER_H
+	var over := 60.0   # overhang so the rounded LEFT/RIGHT edges fall off-screen — only
+					   # the top/bottom borders show, making it a wide edge-to-edge band
+	var root := Control.new()
+	root.size = Vector2(bw, bh)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var outer := _round_panel(Palette.OUTLINE, 14)        # dark top/bottom rim
+	outer.position = Vector2(-over, 0.0)
+	outer.size = Vector2(bw + over * 2.0, bh)
+	root.add_child(outer)
+	var trim := _round_panel(Palette.GOLD, 10)            # gold band
+	trim.position = Vector2(-over, 6.0)
+	trim.size = Vector2(bw + over * 2.0, bh - 12.0)
+	root.add_child(trim)
+	var fill := _round_panel(Palette.FRAME, 8)            # dark fill
+	fill.position = Vector2(-over, 11.0)
+	fill.size = Vector2(bw + over * 2.0, bh - 22.0)
+	root.add_child(fill)
+	# Title drawn (not a Label) so it's dead-centred in the full width.
+	var title := _ComboTitle.new()
+	title.text = text
+	title.size = Vector2(bw, bh)
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(title)
+	return root
+
+## Tiny draw-only Control: the combo title, optically centred like PixelDraw, with a
+## drop shadow, a thin dark outline, and a gold fill.
+class _ComboTitle extends Control:
+	const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
+	const FSIZE := 96
+	var text := "":
+		set(v):
+			text = v
+			queue_redraw()
+	## A nudge so the visible caps land dead-centre (DearPix sits a touch high/left).
+	const NUDGE := Vector2(4.0, 0.0)
+	func _draw() -> void:
+		var ts := FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, FSIZE)
+		# Horizontal: centre the advance width. Vertical: baseline at centre + half the
+		# ascent, which optically centres the cap/diacritic cluster (no descenders here).
+		var base := Vector2((size.x - ts.x) * 0.5, size.y * 0.5 + FONT.get_ascent(FSIZE) * 0.5) + NUDGE
+		# drop shadow, then a thin dark outline (8 directions), then the gold fill.
+		draw_string(FONT, base + Vector2(4.0, 6.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, FSIZE, Color(Palette.OUTLINE, 0.85))
+		for d in [Vector2(-3, 0), Vector2(3, 0), Vector2(0, -3), Vector2(0, 3), Vector2(-2, -2), Vector2(2, -2), Vector2(-2, 2), Vector2(2, 2)]:
+			draw_string(FONT, base + d, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, FSIZE, Palette.OUTLINE)
+		draw_string(FONT, base, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, FSIZE, Palette.GOLD_HI)
+
+## A cinematic combo reveal: dim the screen, slide a full-width character splash UP
+## from the bottom + fade it in, with the combo title banner over its top edge. Only
+## once it has fully faded in does the knight start his frames. Then it all fades out.
+## `sheet` is a horizontal strip of `frames` cells of `cell` size. Awaitable; bails if stale.
+func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vector2, g: int) -> void:
+	var scl := _vw() / cell.x                       # fit the cropped art to full width
+	# Overlay holds the dim + art, screen-fixed via counter-shake so only the TABLE
+	# (the other children of self) quakes underneath it.
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.z_index = 60
+	add_child(overlay)
+	var dim := ColorRect.new()
+	dim.color = Color(0.0, 0.0, 0.0, 0.0)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(dim)
+	# Knight (full width), bottom-aligned so the cropped feet sit on the screen edge.
+	var atlas := AtlasTexture.new()
+	atlas.atlas = sheet
+	atlas.region = Rect2(0.0, 0.0, cell.x, cell.y)
+	var knight := TextureRect.new()
+	knight.texture = atlas
+	knight.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	knight.size = cell
+	knight.pivot_offset = cell * 0.5
+	knight.scale = Vector2(scl, scl)
+	knight.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var knight_y := size.y - cell.y * 0.5 * (1.0 + scl)   # rests with its bottom on the edge
+	knight.position = Vector2(_vw() * 0.5 - cell.x * 0.5, knight_y)
+	knight.modulate.a = 0.0
+	overlay.add_child(knight)
+	# Combo title in a palette-framed banner, placed over the art's TOP edge so it hides
+	# the cropped upper edge of the character.
+	var knight_top := size.y - cell.y * scl
+	var banner := _make_combo_banner(title)
+	var banner_y := knight_top - banner.size.y + 8.0   # bottom sits snug on the gif's top edge
+	banner.position = Vector2(0.0, banner_y)
+	banner.modulate.a = 0.0
+	overlay.add_child(banner)
+	# Earthquake: shake the TABLE (self) and counter it on the overlay so the dim + art
+	# stay put. Decays over SPLASH_SHAKE_TIME, runs alongside the slow slide-in.
+	var quake := create_tween()
+	var qstep := 0.035
+	var qn := int(SPLASH_SHAKE_TIME / qstep)
+	for i in qn:
+		var amp := SPLASH_SHAKE_AMP * (1.0 - float(i) / float(qn))
+		quake.tween_callback(func() -> void:
+			var o := Vector2(randf_range(-amp, amp), randf_range(-amp, amp))
+			position = o
+			if is_instance_valid(overlay):
+				overlay.position = -o)
+		quake.tween_interval(qstep)
+	quake.tween_callback(func() -> void:
+		position = Vector2.ZERO
+		if is_instance_valid(overlay):
+			overlay.position = Vector2.ZERO)
+	# Slide UP from below + fade in (slow). Knight + title rise together.
+	var slide := 320.0
+	var t_in := create_tween()
+	t_in.set_parallel(true)
+	t_in.tween_property(dim, "color:a", SPLASH_DIM, SPLASH_IN * 0.55)
+	t_in.tween_property(knight, "modulate:a", 1.0, SPLASH_IN)
+	t_in.tween_property(knight, "position:y", knight_y, SPLASH_IN) \
+		.from(knight_y + slide).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t_in.tween_property(banner, "modulate:a", 1.0, SPLASH_IN)
+	t_in.tween_property(banner, "position:y", banner_y, SPLASH_IN) \
+		.from(banner_y + slide).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	await t_in.finished
+	if g != _gen:
+		overlay.queue_free()
+		return
+	# Only NOW (fully faded in) start the knight's idle loop (bound to the node).
+	var step := func(fr: float) -> void:
+		var f := int(fr) % frames
+		atlas.region = Rect2(float(f) * cell.x, 0.0, cell.x, cell.y)
+	# Play the idle through ONCE at SPLASH_FPS; the slow fade-out finishes exactly as
+	# the animation reaches its last frame.
+	var anim_dur := float(frames) / SPLASH_FPS
+	knight.create_tween().tween_method(step, 0.0, float(frames), anim_dur)
+	await get_tree().create_timer(maxf(0.0, anim_dur - SPLASH_OUT)).timeout
+	if g != _gen:
+		overlay.queue_free()
+		return
+	var t_out := create_tween()
+	t_out.tween_property(overlay, "modulate:a", 0.0, SPLASH_OUT)
+	await t_out.finished
+	overlay.queue_free()
 
 ## A chặt (chop) just landed: pop a transient +amount / -amount over the chopper
 ## and the chopped seat (synced to the bombing cards landing) and tick both seats'
@@ -839,17 +1080,17 @@ func _relayout() -> void:
 	# Drop the menu glyph by the same amount so it clears the camera too.
 	_chrome.top_inset = top_inset
 
-	# Opponents: hug the left/right edges and centre the top seat, so a wider
-	# canvas pushes the avatars further apart instead of clustering at 720.
-	_place_seat(_seats[3], 8.0, 156.0 + top_inset)                          # left
-	_place_seat(_seats[2], w * 0.5 - _seats[2].size.x * 0.5, 88.0 + top_inset)  # top, centred
-	_place_seat(_seats[1], w - 8.0 - _seats[1].size.x, 156.0 + top_inset)  # right
+	# Opponents pinned to their FIXED screen spots (hidden ones are positioned anyway,
+	# harmlessly): Seraphine left, Vayne top-centre, Grimwald right.
+	_place_seat(_seat_sera, 8.0, 156.0 + top_inset)                          # left
+	_place_seat(_seat_vayne, w * 0.5 - _seat_vayne.size.x * 0.5, 88.0 + top_inset)  # top, centred
+	_place_seat(_seat_grim, w - 8.0 - _seat_grim.size.x, 156.0 + top_inset)  # right
 
 	# Tall phones (aspect > 16:9): only the three opponent avatars drop (via
 	# top_inset above) to clear the camera. The player's own avatar + hand stay
 	# pinned to the bottom — they're bottom-anchored, so they never move.
-	_seats[0].offset_top = -500.0
-	_seats[0].offset_bottom = -288.0
+	_seat_you.offset_top = -500.0
+	_seat_you.offset_bottom = -288.0
 	_hand.offset_top = -305.0
 	_hand.offset_bottom = -165.0
 
@@ -976,8 +1217,8 @@ func _make_card(row: int, col: int, width: float = HAND_W) -> Card:
 ## next deal. (Seat 0 is the human, whose own fan already shows their cards.)
 func _reveal_opponent_hands(data: GameStateData, skip: int = -1) -> void:
 	_clear_revealed()
-	for p in [1, 2, 3]:
-		if p == skip:
+	for p in _seats:
+		if p == 0 or p == skip:
 			continue
 		var hand: Array = (data.hands[p] as Array).duplicate()
 		if hand.is_empty():
@@ -1080,7 +1321,9 @@ func _on_pass() -> void:
 ## starts the game immediately, with their lead). Awaitable.
 func _bao_sam_window(g: int) -> void:
 	_bao_window = true
-	_bao_passed = [false, false, false, false]
+	_bao_passed = []
+	for _p in _seats:
+		_bao_passed.append(false)
 	_chrome.banner_text = "BÁO SÂM?"
 	# Play button = claim, pass button = thôi. (They already read BÁO SÂM / THÔI.)
 	_play_btn.disabled = false
@@ -1094,8 +1337,9 @@ func _bao_sam_window(g: int) -> void:
 		tw.tween_property(_seats[p], "turn_progress", 0.0, TURN_TIME)
 		rings.append(tw)
 	# Bots decide (decline) at staggered moments inside the window.
-	for p in [1, 2, 3]:
-		_bao_bot_thoi(p, g)
+	for p in _seats:
+		if p != 0:
+			_bao_bot_thoi(p, g)
 	# Run until claimed, everyone thôi'd, or time's up.
 	var elapsed := 0.0
 	while _bao_window and elapsed < TURN_TIME and g == _gen:
@@ -1146,6 +1390,7 @@ func _close_bao_window() -> void:
 
 func _restore_action_buttons() -> void:
 	_play_btn.text = "ĐÁNH"
+	_play_btn.variant = PixelButton.Variant.GOLD
 	_pass_btn.text = "THÔI"
 	_set_my_turn(false)   # _start_turn re-enables them for whoever leads
 

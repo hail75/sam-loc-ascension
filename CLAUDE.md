@@ -37,11 +37,23 @@ make that migration painless:
   foul_finish, an_trang_winner, finished, winner`) + `clone()`. No behaviour.
 - `rules/deck.gd` — `Deck`: pure shuffled-deck helper.
 - `autoload/game_state.gd` — `GameState` autoload: the single runtime path. Holds the live
-  `GameStateData`, routes every action through `SamLocRules.apply`, emits signals
-  (`dealt / played / passed / chopped / rejected / match_ended`). **Contains no game logic** — when the
-  server arrives, only this file changes (apply locally → send over WebSocket → apply reply).
+  `GameStateData`, persistent `balances`, and `num_players`, routes every action through
+  `SamLocRules.apply`, emits signals (`dealt / played / passed / chopped / rejected /
+  match_ended`). **Contains no game logic** — when the server arrives, only this file changes
+  (apply locally → send over WebSocket → apply reply).
 - `scenes/table/table_a.gd` — the playable table: presentation + input plumbing only. Renders
   state, reports taps, animates deal/play/win, runs bots on timers.
+
+### Session / elimination (offline)
+- Everyone starts at **`START_BALANCE` = 1000**. Balances are zero-sum and persist across deals.
+- The engine is **variable-player (2–4)**: `deal(rng, first, players)` and every per-player loop
+  reads `state.hands.size()`, not the `NUM_PLAYERS` const (which is just the 4-max default).
+- Between deals (`GameState._apply_elimination`, run at `new_match`): any **bot** at ≤0 coins
+  busts out and the survivors re-index (you are always player 0). **You never leave** — if YOU
+  hit ≤0, or only you'd remain, the table **resets to a fresh 4 players at 1000**.
+- The table maps engine index → a fixed seat NODE per live count (`_build_seat_map`): 4p =
+  you/right(Grimwald)/top(Vayne)/left(Seraphine); 3p drops the **top**; 2p also drops the
+  **left**. Hidden seats stay positioned but invisible.
 
 ### Game rules (current build)
 - **Card encoding:** a card is `[row, col]` into `Cards.png`. Rows 0–3 = suits (suits never
@@ -76,9 +88,13 @@ make that migration painless:
   flush (red rows 0–1 / black rows 2–3) > quad of deuces**. Checked right after dealing
   (`an_trang_tier`/`an_trang_plays`); if anyone qualifies, all buttons/timers freeze, each
   qualifying combo flies to the table in a **golden aura** (weakest first, strongest last),
-  the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Scoring (like báo sâm): each
-  loser pays **20 stake + their own 2/quad penalty** (5 per leftover 2/quad), winner sweeps
-  it. Money is deferred to `GameState.commit_an_trang()` (called at the +/- beat) so the deal
+  the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Some tiers also play a
+  **dark-fantasy splash** first (a character sheet from `assets/splash/`, e.g. `tuquy2`
+  for quad-2, `sanhrong` for the ten-straight) — dim + quake + a full-width character
+  rising from the bottom under a palette-framed title banner; see `_play_combo_splash`.
+  Scoring (like báo sâm): each
+  loser pays a flat **20 stake**, winner sweeps it (+60 total). Money is deferred to
+  `GameState.commit_an_trang()` (called at the +/- beat) so the deal
   shows pre-win balances. **DEBUG:** `GameState.AN_TRANG_DEBUG` forces Vayne (seat 2) to hold
   the four 2s every deal — turn OFF for real play.
 - **Báo sâm (the namesake ritual):** before each deal there's a claim window. A player may

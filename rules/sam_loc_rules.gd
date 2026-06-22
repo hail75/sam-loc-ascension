@@ -18,8 +18,8 @@ extends RefCounted
 ## ĂN TRẮNG (instant win on the deal): some dealt hands win on the spot (deuces
 ## allowed) — strongest to weakest: three triplets > ten-card straight > five pairs >
 ## ten-card single-colour flush > quad of deuces. Detected right after the deal (see
-## `an_trang_tier` / `an_trang_plays`); the strongest holder wins. Each loser pays
-## AN_TRANG_PER + their own 2/quad penalty (see `settle`).
+## `an_trang_tier` / `an_trang_plays`); the strongest holder wins. Each loser pays a
+## flat AN_TRANG_PER stake (see `settle`).
 ##
 ## FINISHING ON A DEUCE IS A FOUL (thối 2): a play that empties your hand while still
 ## holding a 2 is allowed, but you DON'T win — the deal ends, you forfeit the pot and
@@ -63,8 +63,7 @@ const CHOP_STAKE := 15
 ## Stake units a "thối 2" fouler (who emptied their hand on a play holding a deuce)
 ## pays to EACH other player. They forfeit the win.
 const FINISH_TWO_STAKE := 15
-## Stake units each opponent pays the ĂN TRẮNG (instant-win) winner, ON TOP of their
-## own 2/quad penalty (SPECIAL_STAKE per leftover 2/quad — every card is "leftover").
+## Stake units each opponent pays the ĂN TRẮNG (instant-win) winner — flat, like báo sâm.
 const AN_TRANG_PER := 20
 
 ## Combo kinds. Order/values are internal; compare only within the same kind.
@@ -94,8 +93,8 @@ static func rank(card: Array) -> int:
 ##    held one) pays their own normal-loss amount to EACH other loser. Empty (all
 ##    zero) when nobody owed it.
 ##  * `deltas` — the pot itself:
-##     - ĂN TRẮNG (instant win on the deal): each loser pays AN_TRANG_PER + their own
-##       2/quad penalty; the winner sweeps it. Supersedes everything below.
+##     - ĂN TRẮNG (instant win on the deal): each loser pays a flat AN_TRANG_PER stake
+##       (like báo sâm); the winner sweeps it. Supersedes everything below.
 ##     - Báo sâm declared: the declarer wins/pays BAO_SAM_PER PER opponent (success →
 ##       +per each, +3·per total; failure → −per each, −3·per total).
 ##     - Otherwise: each loser pays 1 stake per card left + SPECIAL_STAKE per leftover
@@ -103,30 +102,29 @@ static func rank(card: Array) -> int:
 ## (Chặt side-payments are settled immediately during play — see `_play` — and are
 ## NOT included here.)
 static func settle(state: GameStateData) -> Dictionary:
+	var n := state.hands.size()
 	var deltas: Array = []
 	var feed: Array = []
-	for _p in NUM_PLAYERS:
+	for _p in n:
 		deltas.append(0)
 		feed.append(0)
-	# ĂN TRẮNG (instant win on the deal) supersedes everything: each loser pays
-	# AN_TRANG_PER + their own 2/quad penalty; the winner sweeps it.
+	# ĂN TRẮNG (instant win on the deal) supersedes everything: each loser pays a flat
+	# AN_TRANG_PER stake (like báo sâm); the winner sweeps it.
 	if state.an_trang_winner != -1:
 		var w := state.an_trang_winner
-		var total := 0
-		for p in NUM_PLAYERS:
+		var per := AN_TRANG_PER * STAKE
+		for p in n:
 			if p == w:
 				continue
-			var amt := (AN_TRANG_PER + _special_count(state.hands[p]) * SPECIAL_STAKE) * STAKE
-			deltas[p] = -amt
-			total += amt
-		deltas[w] = total
+			deltas[p] = -per
+		deltas[w] = (n - 1) * per
 		return {"feed": feed, "deltas": deltas}
 	if state.bao_sam != -1:
 		var success := not state.bao_sam_failed
 		var per := BAO_SAM_PER * STAKE
-		for p in NUM_PLAYERS:
+		for p in n:
 			if p == state.bao_sam:
-				deltas[p] = (NUM_PLAYERS - 1) * per * (1 if success else -1)
+				deltas[p] = (n - 1) * per * (1 if success else -1)
 			else:
 				deltas[p] = per * (-1 if success else 1)
 		return {"feed": feed, "deltas": deltas}
@@ -134,14 +132,14 @@ static func settle(state: GameStateData) -> Dictionary:
 	# other player and there is no winner-takes-all settle.
 	if state.foul_finish != -1:
 		var f := state.foul_finish
-		for q in NUM_PLAYERS:
+		for q in n:
 			if q == f:
 				continue
 			feed[q] += FINISH_TWO_STAKE * STAKE
 			feed[f] -= FINISH_TWO_STAKE * STAKE
 		return {"feed": feed, "deltas": deltas}
 	var pot := 0
-	for p in NUM_PLAYERS:
+	for p in n:
 		if p == state.winner:
 			continue
 		var pen := _loss_penalty(state.hands[p])
@@ -154,7 +152,7 @@ static func settle(state: GameStateData) -> Dictionary:
 	if state.den_feeder != -1:
 		var feeder := state.den_feeder
 		var pen := _loss_penalty(state.hands[feeder])
-		for L in NUM_PLAYERS:
+		for L in n:
 			if L == state.winner or L == feeder:
 				continue
 			feed[L] += pen
@@ -241,7 +239,7 @@ static func _card_color(card: Array) -> int:
 ## nobody qualifies.
 static func an_trang_plays(state: GameStateData) -> Array:
 	var out: Array = []
-	for p in NUM_PLAYERS:
+	for p in state.hands.size():
 		var tier := an_trang_tier(state.hands[p])
 		if tier != AnTrang.NONE:
 			out.append({"player": p, "tier": tier})
@@ -268,15 +266,15 @@ static func an_trang_cards(hand: Array, tier: int) -> Array:
 		_:
 			return hand.duplicate(true)
 
-## Deal a fresh match: 10 cards each. `first` leads (the previous match's winner;
-## defaults to player 0 for the very first match).
-static func deal(rng: RandomNumberGenerator, first: int = 0) -> GameStateData:
+## Deal a fresh match: 10 cards each to `players` players (2–4). `first` leads (the
+## previous match's winner; defaults to player 0 for the very first match).
+static func deal(rng: RandomNumberGenerator, first: int = 0, players: int = NUM_PLAYERS) -> GameStateData:
 	var deck := Deck.make_shuffled(rng)
 	var s := GameStateData.new()
-	for _p in NUM_PLAYERS:
+	for _p in players:
 		s.hands.append([])
 		s.passed.append(false)
-	for p in NUM_PLAYERS:
+	for p in players:
 		for _i in HAND_SIZE:
 			s.hands[p].append(deck.pop_back())
 	s.current = first
@@ -413,7 +411,7 @@ static func _declare(state: GameStateData, p: int) -> Dictionary:
 	ns.bao_sam = p
 	ns.current = p
 	ns.table_owner = -1
-	for q in NUM_PLAYERS:
+	for q in ns.hands.size():
 		ns.passed[q] = false
 	return {"ok": true, "state": ns, "reason": ""}
 
@@ -468,10 +466,12 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 	if hand.is_empty():
 		ns.finished = true
 		ns.winner = p
-		# Đền: the winner went out on their last card — a single — by beating the single
-		# someone else just put down. If that someone still holds a HIGHER single, they
-		# failed to "play their highest" and the win landed instantly on them: they đền.
-		if cards.size() == 1 and state.table_owner != -1 and state.table_owner != p:
+		# Đền: the winner went out on their last card — a single — beating the table single
+		# with NO pass since it was played (`den_eligible`), so they are the immediate next
+		# player to act after whoever played it (the seats between had already folded). If
+		# that player still holds a HIGHER single, they failed to "play their highest" and
+		# the win landed on them: they đền.
+		if cards.size() == 1 and state.den_eligible and state.table_owner != p:
 			var played_rank := rank(state.table[0])
 			for c in state.hands[state.table_owner]:
 				if rank(c) > played_rank:
@@ -485,6 +485,9 @@ static func _play(state: GameStateData, p: int, cards: Array) -> Dictionary:
 	# on a merely-can't-be-beaten-right-now read of the hidden hands: every beatable
 	# trick is left for each player to answer or pass by hand (the human keeps their
 	# turn; bots pass on their timer).
+	# A single play arms the đền watch (whoever beats it next, with no pass between, is
+	# the immediate next player); any other play disarms it.
+	ns.den_eligible = cards.size() == 1
 	var nxt := _next_active(ns, p)
 	if nxt == p or _is_unbeatable(ns.table):
 		_new_trick(ns, p)
@@ -547,7 +550,14 @@ static func _pass(state: GameStateData, p: int) -> Dictionary:
 		ns.finished = true
 		ns.winner = _next_active(ns, p)
 		return {"ok": true, "state": ns, "reason": ""}
+	# Declining an OPEN lead (empty table): no trick has started, so this only hands the
+	# open right to the next player — you are NOT folded and still play the trick once
+	# someone actually leads a card.
+	if ns.table.is_empty():
+		ns.current = _next_active(ns, p)
+		return {"ok": true, "state": ns, "reason": ""}
 	ns.passed[p] = true
+	ns.den_eligible = false   # a pass breaks the "immediate next player" đền chain
 	# A trick is in progress and only its owner is left standing: they take it
 	# and lead a fresh trick (everyone folds back in).
 	if ns.table_owner != -1 and _active_count(ns) <= 1:
@@ -562,13 +572,14 @@ static func _new_trick(ns: GameStateData, leader: int) -> void:
 	ns.table = []
 	ns.table_owner = -1
 	ns.chop_level = 0
-	for q in NUM_PLAYERS:
+	ns.den_eligible = false
+	for q in ns.hands.size():
 		ns.passed[q] = false
 	ns.current = leader
 
 static func _active_count(state: GameStateData) -> int:
 	var n := 0
-	for q in NUM_PLAYERS:
+	for q in state.hands.size():
 		if not state.passed[q]:
 			n += 1
 	return n
@@ -576,12 +587,13 @@ static func _active_count(state: GameStateData) -> int:
 ## Next player (counter-clockwise) who hasn't folded this trick. Falls back to
 ## the immediate next index if everyone has folded (degenerate; can't loop).
 static func _next_active(state: GameStateData, p: int) -> int:
-	var q := (p + 1) % NUM_PLAYERS
-	for _i in NUM_PLAYERS:
+	var n := state.hands.size()
+	var q := (p + 1) % n
+	for _i in n:
 		if not state.passed[q]:
 			return q
-		q = (q + 1) % NUM_PLAYERS
-	return (p + 1) % NUM_PLAYERS
+		q = (q + 1) % n
+	return (p + 1) % n
 
 static func _index_of(hand: Array, card: Array) -> int:
 	for i in hand.size():
@@ -610,7 +622,9 @@ static func find_play(state: GameStateData, player: int) -> Array:
 	var hand: Array = state.hands[player]
 	var opp_min := _min_opponent_cards(state, player)
 	var my_n := hand.size()
-	var next_n: int = state.hands[(player + 1) % NUM_PLAYERS].size()
+	# The player who will ACT next after us (skips any already folded this trick) — the
+	# one the đền obligation is about. On a fresh lead this is just the seat to our left.
+	var next_n: int = state.hands[_next_active(state, player)].size()
 	if state.table.is_empty():
 		return _lead(hand, opp_min, my_n, next_n)
 	return _respond(state.table, hand, opp_min, my_n, next_n)
@@ -619,7 +633,7 @@ static func find_play(state: GameStateData, player: int) -> Array:
 ## which is when hoarded control becomes worth spending.
 static func _min_opponent_cards(state: GameStateData, player: int) -> int:
 	var m := 99
-	for q in NUM_PLAYERS:
+	for q in state.hands.size():
 		if q != player:
 			m = mini(m, state.hands[q].size())
 	return m

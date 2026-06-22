@@ -8,7 +8,7 @@ extends Control
 
 signal pressed
 
-enum Variant { GOLD, CRIMSON, DISABLED }
+enum Variant { GOLD, CRIMSON, DISABLED, EMBER }
 
 const FONT: Font = preload("res://assets/fonts/dearpix.ttf")
 const DROP := 10.0  # hard drop-shadow depth; also the press travel
@@ -91,6 +91,9 @@ func _draw() -> void:
 		Variant.DISABLED:
 			fill = Palette.FRAME
 			ink = Color("7d5f33")
+		Variant.EMBER:
+			fill = Palette.EMBER
+			ink = Palette.OUTLINE
 	if off:
 		# Grey out the button's OWN colour: desaturate + dim, keep the hue.
 		fill = _greyed(fill)

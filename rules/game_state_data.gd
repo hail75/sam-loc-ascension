@@ -24,6 +24,9 @@ var den_feeder: int = -1     # set on the winning play: the player whose single 
                              # 1-card winner just beat to go out, IF that single wasn't
                              # their highest (they still held a higher one). They pay the
                              # đền penalty in settle. -1 = nobody owes it.
+var den_eligible: bool = false  # true iff the table card was placed by a SINGLE play with
+                             # no pass since — so whoever beats it is the immediate next
+                             # player to act (the one the đền obligation is about).
 var foul_finish: int = -1    # player who ended on a deuce ("thối 2"): they DON'T win
                              # and pay the foul penalty. -1 = no foul this deal.
 var finished: bool = false
@@ -43,6 +46,7 @@ func clone() -> GameStateData:
 	s.chop_level = chop_level
 	s.an_trang_winner = an_trang_winner
 	s.den_feeder = den_feeder
+	s.den_eligible = den_eligible
 	s.foul_finish = foul_finish
 	s.finished = finished
 	s.winner = winner

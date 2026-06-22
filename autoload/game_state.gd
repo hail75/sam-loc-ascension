@@ -18,28 +18,43 @@ signal chopped(from_player: int, to_player: int, amount: int, balances: Array)
 ## `balances` already reflects both.
 signal match_ended(winner: int, deltas: Array, feed: Array, balances: Array, data: GameStateData)
 
-const START_BALANCE := 8080
+const START_BALANCE := 1000
 
-## DEBUG: force Vayne (seat 2) to hold the four 2s every deal, so the ĂN TRẮNG
-## (instant-win) flow fires every match. Turn OFF for real play.
+## DEBUG: force Vayne (seat 2) to hold a fixed ĂN TRẮNG hand every deal so the
+## instant-win flow fires every match. Turn OFF for real play. The forced hand is
+## [row, col] cards (col: 0=A,1=2,2=3…12=K). Current: a ten-card straight A→10
+## (cols 0–9), mixed suits → "SẢNH RỒNG".
+## DEBUG: start the session with one bot already kicked (3 players) to eyeball the
+## shrunk layout without playing a bot broke first. OFF for real play.
+const DEBUG_KICK_ONE := false
 const AN_TRANG_DEBUG := false
 const AN_TRANG_DEBUG_SEAT := 2
+const AN_TRANG_DEBUG_HAND := [
+	[0, 0], [1, 1], [2, 2], [3, 3], [0, 4],
+	[1, 5], [2, 6], [3, 7], [0, 8], [1, 9],
+]
 
 var data: GameStateData
-var balances: Array = []          # persistent per-player money, survives re-deals
+var balances: Array = []          # per-player money (one per LIVE player), survives re-deals
+var num_players := SamLocRules.NUM_PLAYERS   # live players this session (shrinks as bots bust)
 var _last_winner := 0             # leads the next deal; player 0 for match one
 var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	_rng.randomize()
-	for _p in SamLocRules.NUM_PLAYERS:
+	if DEBUG_KICK_ONE:
+		num_players = SamLocRules.NUM_PLAYERS - 1   # start at 3 players
+	for _p in num_players:
 		balances.append(START_BALANCE)
 
 ## Start (or restart) a match and deal fresh hands; last match's winner leads.
 func new_match() -> void:
-	data = SamLocRules.deal(_rng, _last_winner)
+	_apply_elimination()
+	if _last_winner < 0 or _last_winner >= num_players:
+		_last_winner = 0
+	data = SamLocRules.deal(_rng, _last_winner, num_players)
 	if AN_TRANG_DEBUG:
-		_debug_force_quad_deuces(AN_TRANG_DEBUG_SEAT)
+		_debug_force_hand(AN_TRANG_DEBUG_SEAT, AN_TRANG_DEBUG_HAND)
 	# ĂN TRẮNG: if anyone was dealt an instant-win hand, the strongest wins on the spot.
 	# Set up the win now (so the table can animate it) but defer the money to
 	# commit_an_trang(), called once the table reaches the +/- beat.
@@ -52,6 +67,40 @@ func new_match() -> void:
 		_last_winner = w
 	dealt.emit(data)
 
+## Before a fresh deal: bust out broke bots (re-indexing the survivors). YOU (player 0)
+## never leave — if you're broke, or only you'd remain, the whole table resets to a
+## fresh 4 players at START_BALANCE.
+func _apply_elimination() -> void:
+	if balances[0] <= 0:
+		_reset_all()
+		return
+	var kept: Array = []
+	for p in num_players:
+		if p == 0 or balances[p] > 0:
+			kept.append(p)
+	if kept.size() <= 1:
+		_reset_all()      # only you left → fresh table
+		return
+	if kept.size() == num_players:
+		return            # nobody busted
+	var new_bal: Array = []
+	var nw := 0
+	for i in kept.size():
+		new_bal.append(balances[kept[i]])
+		if kept[i] == _last_winner:
+			nw = i
+	balances = new_bal
+	num_players = kept.size()
+	_last_winner = nw
+
+## Reset to a full 4-player table at START_BALANCE.
+func _reset_all() -> void:
+	num_players = SamLocRules.NUM_PLAYERS
+	balances = []
+	for _p in num_players:
+		balances.append(START_BALANCE)
+	_last_winner = 0
+
 ## Apply the deferred ĂN TRẮNG settle to balances; returns { deltas, balances } for
 ## the table's +/- pops. Call exactly once, when the win beat is shown.
 func commit_an_trang() -> Dictionary:
@@ -61,23 +110,29 @@ func commit_an_trang() -> Dictionary:
 		balances[i] += deltas[i]
 	return {"deltas": deltas, "balances": balances.duplicate()}
 
-## DEBUG helper: rebuild the hands so `seat` holds all four 2s. The 52-card deck only
-## deals 40, so some 2s may be undealt — inject all four explicitly (col 1, every
-## suit) and fill from the dealt NON-deuce cards. Keeps every hand at HAND_SIZE.
-func _debug_force_quad_deuces(seat: int) -> void:
-	var deuces: Array = [[0, 1], [1, 1], [2, 1], [3, 1]]
+## DEBUG helper: rebuild the hands so `seat` holds exactly `forced` ([row, col] cards),
+## filling the rest from the dealt cards that aren't in `forced`. The 52-card deck only
+## deals 40, so some forced cards may be undealt — they're injected explicitly. Keeps
+## every hand at HAND_SIZE.
+func _debug_force_hand(seat: int, forced: Array) -> void:
+	var n := data.hands.size()
 	var pool: Array = []
-	for p in SamLocRules.NUM_PLAYERS:
+	for p in n:
 		for c in data.hands[p]:
-			if c[1] != 1:
+			var is_forced := false
+			for f in forced:
+				if f[0] == c[0] and f[1] == c[1]:
+					is_forced = true
+					break
+			if not is_forced:
 				pool.append(c)
 	var hands: Array = []
-	for _p in SamLocRules.NUM_PLAYERS:
+	for _p in n:
 		hands.append([])
-	hands[seat].append_array(deuces)
-	for _i in (SamLocRules.HAND_SIZE - deuces.size()):
+	hands[seat].append_array(forced.duplicate(true))
+	for _i in (SamLocRules.HAND_SIZE - forced.size()):
 		hands[seat].append(pool.pop_back())
-	for p in SamLocRules.NUM_PLAYERS:
+	for p in n:
 		if p == seat:
 			continue
 		for _i in SamLocRules.HAND_SIZE:
