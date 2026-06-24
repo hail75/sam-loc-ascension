@@ -14,6 +14,11 @@ const DECK_TEX: Texture2D = preload("res://assets/cards/deck_stack.png")
 const TUQUY2_TEX: Texture2D = preload("res://assets/splash/tuquy2.png")
 const TUQUY2_FRAMES := 16
 const TUQUY2_CELL := Vector2(127, 127)
+## "TỨ QUÝ" — the rising knight shown whenever a quad is PLAYED in-trick (chặt / lead),
+## banner-less and quake-less. Distinct from tuquy2 (the ĂN TRẮNG quad-of-deuces).
+const TUQUY_TEX: Texture2D = preload("res://assets/splash/tuquy.png")
+const TUQUY_FRAMES := 16
+const TUQUY_CELL := Vector2(127, 127)
 ## "SẢNH RỒNG" (ten-card straight) — a winged dragon-knight, cropped on all sides.
 const SANHRONG_TEX: Texture2D = preload("res://assets/splash/sanhrong.png")
 const SANHRONG_FRAMES := 16
@@ -55,6 +60,9 @@ const SPLASH_DIM := 0.78                      # combo-splash dim-overlay opacity
 const SPLASH_IN := 2.6                        # splash slide-up + fade in (very slow, dramatic)
 const SPLASH_FPS := 4.0                       # combo-splash playback speed (slow)
 const SPLASH_OUT := 0.9                       # splash fade out (slow), ends as the anim ends
+## Total blocking time of the TỨ QUÝ quad splash (slide-in + one idle pass), so the
+## chop pop and the win settle can wait for it before the quad cards land + fly.
+const QUAD_SPLASH_TIME := SPLASH_IN + float(TUQUY_FRAMES) / SPLASH_FPS
 const SPLASH_SHAKE_TIME := 0.7               # earthquake duration as the splash crashes in
 const SPLASH_SHAKE_AMP := 22.0               # earthquake peak offset (decays to 0)
 const WIN_PAUSE := 5.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
@@ -473,14 +481,26 @@ func _on_played(player: int, cards: Array, data: GameStateData) -> void:
 	if player == 0:
 		_build_hand_from(data.hands[0])   # collapse the fan to the remaining cards
 	_fade_out_pile()                       # ease the previous trick away as the new one arrives
-	_fly_to_table(origins, cards, func() -> void:
+	var on_landed := func() -> void:
 		_seats[player].card_count = data.hands[player].size()
 		last_played = cards
 		_rebuild_last_played()
 		if not data.finished:
-			_start_turn(data))
+			_start_turn(data)
+	# A quad (tứ quý / chặt) gets the rising-knight splash — the SAME animation as
+	# ĂN TRẮNG's TỨ QUÝ, but with NO title banner and NO screen quake. It plays first,
+	# then the cards fly to the table as usual.
+	if _is_quad(cards):
+		await _play_combo_splash("", TUQUY_TEX, TUQUY_FRAMES, TUQUY_CELL, _gen, false, false)
+	_fly_to_table(origins, cards, on_landed)
 
 func _on_passed(_player: int, data: GameStateData) -> void:
+	# A pass that ENDS the trick clears the table (engine ran _new_trick): the next
+	# player opens a fresh hand. Fade the last-played pile away now — the same sink-
+	# and-fade we do before the next card lands — so it reads as "new hand, you don't
+	# have to follow this", instead of leaving the dead trick sitting on the felt.
+	if data.table.is_empty() and not data.finished:
+		_fade_out_pile()
 	_start_turn(data)
 
 func _on_match_ended(winner: int, deltas: Array, feed: Array, balances: Array, _data: GameStateData) -> void:
@@ -506,7 +526,9 @@ func _on_match_ended(winner: int, deltas: Array, feed: Array, balances: Array, _
 	# Wait for them to land and rest a beat so the final play reads, THEN fade the
 	# whole pile away and — once it's gone — bring up the reveal and the +/- pops
 	# together as one beat.
-	await get_tree().create_timer(FLY_TIME + WIN_SETTLE).timeout
+	# A quad finisher plays the TỨ QUÝ splash before the cards fly, so wait it out.
+	var land_time := (QUAD_SPLASH_TIME + FLY_TIME) if _is_quad(_data.table) else FLY_TIME
+	await get_tree().create_timer(land_time + WIN_SETTLE).timeout
 	_fade_out_pile()
 	await get_tree().create_timer(PILE_FADE).timeout
 	_reveal_opponent_hands(_data)     # show what the others were holding
@@ -783,7 +805,8 @@ class _ComboTitle extends Control:
 ## from the bottom + fade it in, with the combo title banner over its top edge. Only
 ## once it has fully faded in does the knight start his frames. Then it all fades out.
 ## `sheet` is a horizontal strip of `frames` cells of `cell` size. Awaitable; bails if stale.
-func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vector2, g: int) -> void:
+func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vector2, g: int,
+		do_quake: bool = true, show_banner: bool = true) -> void:
 	var scl := _vw() / cell.x                       # fit the cropped art to full width
 	# Overlay holds the dim + art, screen-fixed via counter-shake so only the TABLE
 	# (the other children of self) quakes underneath it.
@@ -815,28 +838,32 @@ func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vect
 	# Combo title in a palette-framed banner, placed over the art's TOP edge so it hides
 	# the cropped upper edge of the character.
 	var knight_top := size.y - cell.y * scl
-	var banner := _make_combo_banner(title)
-	var banner_y := knight_top - banner.size.y + 8.0   # bottom sits snug on the gif's top edge
-	banner.position = Vector2(0.0, banner_y)
-	banner.modulate.a = 0.0
-	overlay.add_child(banner)
+	var banner: Control = null
+	var banner_y := 0.0
+	if show_banner:
+		banner = _make_combo_banner(title)
+		banner_y = knight_top - banner.size.y + 8.0   # bottom sits snug on the gif's top edge
+		banner.position = Vector2(0.0, banner_y)
+		banner.modulate.a = 0.0
+		overlay.add_child(banner)
 	# Earthquake: shake the TABLE (self) and counter it on the overlay so the dim + art
 	# stay put. Decays over SPLASH_SHAKE_TIME, runs alongside the slow slide-in.
-	var quake := create_tween()
-	var qstep := 0.035
-	var qn := int(SPLASH_SHAKE_TIME / qstep)
-	for i in qn:
-		var amp := SPLASH_SHAKE_AMP * (1.0 - float(i) / float(qn))
+	if do_quake:
+		var quake := create_tween()
+		var qstep := 0.035
+		var qn := int(SPLASH_SHAKE_TIME / qstep)
+		for i in qn:
+			var amp := SPLASH_SHAKE_AMP * (1.0 - float(i) / float(qn))
+			quake.tween_callback(func() -> void:
+				var o := Vector2(randf_range(-amp, amp), randf_range(-amp, amp))
+				position = o
+				if is_instance_valid(overlay):
+					overlay.position = -o)
+			quake.tween_interval(qstep)
 		quake.tween_callback(func() -> void:
-			var o := Vector2(randf_range(-amp, amp), randf_range(-amp, amp))
-			position = o
+			position = Vector2.ZERO
 			if is_instance_valid(overlay):
-				overlay.position = -o)
-		quake.tween_interval(qstep)
-	quake.tween_callback(func() -> void:
-		position = Vector2.ZERO
-		if is_instance_valid(overlay):
-			overlay.position = Vector2.ZERO)
+				overlay.position = Vector2.ZERO)
 	# Slide UP from below + fade in (slow). Knight + title rise together.
 	var slide := 320.0
 	var t_in := create_tween()
@@ -845,9 +872,10 @@ func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vect
 	t_in.tween_property(knight, "modulate:a", 1.0, SPLASH_IN)
 	t_in.tween_property(knight, "position:y", knight_y, SPLASH_IN) \
 		.from(knight_y + slide).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	t_in.tween_property(banner, "modulate:a", 1.0, SPLASH_IN)
-	t_in.tween_property(banner, "position:y", banner_y, SPLASH_IN) \
-		.from(banner_y + slide).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	if banner != null:
+		t_in.tween_property(banner, "modulate:a", 1.0, SPLASH_IN)
+		t_in.tween_property(banner, "position:y", banner_y, SPLASH_IN) \
+			.from(banner_y + slide).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	await t_in.finished
 	if g != _gen:
 		overlay.queue_free()
@@ -875,7 +903,10 @@ func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vect
 func _on_chopped(from_player: int, to_player: int, amount: int, bals: Array) -> void:
 	var g := _gen
 	# Wait for the chopping cards to reach the table so the +/- reads as the payout.
-	await get_tree().create_timer(FLY_TIME).timeout
+	# A single-quad chop plays the TỨ QUÝ splash before the cards fly; a double-quad
+	# (8 cards) flies normally.
+	var land_time := (QUAD_SPLASH_TIME + FLY_TIME) if _is_quad(GameState.data.table) else FLY_TIME
+	await get_tree().create_timer(land_time).timeout
 	if g != _gen:
 		return
 	_pop_chop(_seats[from_player], str(-amount), POP_GREY)
@@ -1198,6 +1229,15 @@ func _fly_to_table(origins: Array, cards: Array, on_done: Callable) -> void:
 		for t in temps:
 			t.queue_free()
 		on_done.call())
+
+## Four cards of one rank — a quad (tứ quý), which gets the build-up flight.
+func _is_quad(cards: Array) -> bool:
+	if cards.size() != 4:
+		return false
+	for c in cards:
+		if c[1] != cards[0][1]:
+			return false
+	return true
 
 ## Fallback origin (bots, or if we lost the captured hand positions): the centre
 ## of the player's avatar.
