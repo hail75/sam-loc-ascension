@@ -31,7 +31,7 @@ const SAMCO3_CELL := Vector2(200, 200)
 const NAMDOI_TEX: Texture2D = preload("res://assets/splash/5doi.png")
 const NAMDOI_FRAMES := 16
 const NAMDOI_CELL := Vector2(147, 147)
-## "FULL ĐỎ" / "FULL ĐEN" (ten-card single-colour flush) — the red / black wizard,
+## "ĐỒNG HOA ĐỎ" / "ĐỒNG HOA ĐEN" (ten-card single-colour flush) — the red / black wizard,
 ## picked by the flush's colour.
 const FULLDO_TEX: Texture2D = preload("res://assets/splash/fulldo.png")
 const FULLDEN_TEX: Texture2D = preload("res://assets/splash/fullden.png")
@@ -1265,7 +1265,7 @@ func _an_trang_splash(tier: int, hand: Array) -> Dictionary:
 			return {"title": "5 ĐÔI", "tex": NAMDOI_TEX, "frames": NAMDOI_FRAMES, "cell": NAMDOI_CELL}
 		SamLocRules.AnTrang.FLUSH:
 			var red := SamLocRules.card_color(hand[0]) == 0
-			return {"title": "FULL ĐỎ" if red else "FULL ĐEN",
+			return {"title": "ĐỒNG HOA ĐỎ" if red else "ĐỒNG HOA ĐEN",
 				"tex": FULLDO_TEX if red else FULLDEN_TEX, "frames": FULL_FRAMES, "cell": FULL_CELL}
 		SamLocRules.AnTrang.QUAD_TWOS:
 			return {"title": "TỨ QUÝ 2", "tex": TUQUY2_TEX, "frames": TUQUY2_FRAMES, "cell": TUQUY2_CELL}
@@ -1492,6 +1492,7 @@ func _restore_action_buttons() -> void:
 # --- editor preview (no GameState in the editor) --------------------------
 
 func _editor_preview() -> void:
+	_build_seat_map(4)   # no GameState in the editor: show the full 4-seat table
 	var counts := {0: 10, 1: 9, 2: 9, 3: 1}
 	var money := {0: 8080, 1: 8080, 2: 8080, 3: 8080}
 	for p in _seats:

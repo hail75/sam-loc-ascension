@@ -91,7 +91,7 @@ make that migration painless:
   the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Every tier first plays a
   **dark-fantasy splash** (a 16-frame strip from `assets/splash/`, chosen in
   `_an_trang_splash`): `3samco` 3 SÁM CÔ, `sanhrong` SẢNH RỒNG, `5doi` 5 ĐÔI,
-  `fulldo`/`fullden` FULL ĐỎ/ĐEN (by the flush's colour), `tuquy2` TỨ QUÝ 2 — dim + quake +
+  `fulldo`/`fullden` ĐỒNG HOA ĐỎ/ĐEN (by the flush's colour), `tuquy2` TỨ QUÝ 2 — dim + quake +
   a full-width character rising from the bottom under a palette-framed title banner; see
   `_play_combo_splash`. In play, a quad gets the banner-less `tuquy` knight, and a play that
   breaks a báo sâm gets the `chatsam` skull ("CHẶT SÂM") instead (`_breaks_bao_sam`,

@@ -157,8 +157,8 @@ Every ăn trắng hand gets its own dark-fantasy splash before the cards fly:
     <td align="center"><img src="docs/readme/5doi.gif" width="150" alt="5 ĐÔI — the assassin" /><br /><b>5 ĐÔI</b><br /><sub>5 pairs</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/readme/fulldo.gif" width="150" alt="FULL ĐỎ — the red wizard" /><br /><b>FULL ĐỎ</b><br /><sub>all-red flush</sub></td>
-    <td align="center"><img src="docs/readme/fullden.gif" width="150" alt="FULL ĐEN — the black wizard" /><br /><b>FULL ĐEN</b><br /><sub>all-black flush</sub></td>
+    <td align="center"><img src="docs/readme/fulldo.gif" width="150" alt="ĐỒNG HOA ĐỎ — the red wizard" /><br /><b>ĐỒNG HOA ĐỎ</b><br /><sub>all-red flush</sub></td>
+    <td align="center"><img src="docs/readme/fullden.gif" width="150" alt="ĐỒNG HOA ĐEN — the black wizard" /><br /><b>ĐỒNG HOA ĐEN</b><br /><sub>all-black flush</sub></td>
     <td align="center"><img src="docs/readme/tuquy2.gif" width="150" alt="TỨ QUÝ 2 — the golden knight" /><br /><b>TỨ QUÝ 2</b><br /><sub>quad of deuces</sub></td>
   </tr>
 </table>
