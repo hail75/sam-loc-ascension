@@ -142,6 +142,11 @@ Some hands win the moment they're dealt. Strongest to weakest:
 
 Each loser pays a flat **20 stakes**.
 
+> [!NOTE]
+> 🐉 *Sảnh rồng* and ⚔️ *tứ quý 2* already have their dark-fantasy splash cinematics.
+> Splash VFX for the other ăn trắng hands (3 triplets, 5 pairs, single-colour flush)
+> are coming in a future update.
+
 </details>
 
 <details>
