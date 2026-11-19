@@ -2,6 +2,10 @@
 
 <img src="docs/readme/icon.png" width="180" alt="Sâm Lốc: Ascension icon" />
 
+<br />
+
+<img src="docs/readme/wordmark.png" width="440" alt="Ascension" />
+
 # Sâm Lốc: Ascension
 
 **The Northern-Vietnamese card game Sâm Lốc, re-forged in high-fantasy pixel art.**
@@ -35,7 +39,8 @@
 
 **Ascension** keeps the rules and the Vietnamese vocabulary front and centre (*đánh*,
 *chặt*, *đền*, *thối*, *ăn trắng*, *báo sâm*) and wraps them in a warm, crimson-and-gold
-fantasy tavern with a wizard, a knight and a dragon looking on. The title comes from
+fantasy tavern where a jester, an assassin, a wizard, a knight and a dragon are waiting for a
+legendary hand. The title comes from
 **báo sâm**: declaring, before the first card falls, that your hand can't be beaten.
 
 <div align="center">
@@ -52,7 +57,8 @@ fantasy tavern with a wizard, a knight and a dragon looking on. The title comes 
 - 💰 **Persistent coin session**: everyone starts at **1000**, money is zero-sum across deals,
   broke bots bust out, and the table shrinks from 4 → 3 → 2 players.
 - 🐉 **Dark-fantasy combo cinematics**: dimmed screen, earthquake, and a full-width character
-  rising under a gold-framed banner when a legendary hand appears.
+  rising under a gold-framed banner. Every ăn trắng hand, every quad, and every broken báo sâm
+  has its own.
 - 📱 **Built for phones**: portrait-locked, notch-aware layout that stretches cleanly from thin
   phones to squarer tablets.
 - 🇻🇳 **Vietnamese UI**: `ĐÁNH`, `BỎ LƯỢT`, `LƯỢT CỦA BẠN`, `… THẮNG`, with full diacritics
@@ -142,10 +148,20 @@ Some hands win the moment they're dealt. Strongest to weakest:
 
 Each loser pays a flat **20 stakes**.
 
-> [!NOTE]
-> 🐉 *Sảnh rồng* and ⚔️ *tứ quý 2* already have their dark-fantasy splash cinematics.
-> Splash VFX for the other ăn trắng hands (3 triplets, 5 pairs, single-colour flush)
-> are coming in a future update.
+Every ăn trắng hand gets its own dark-fantasy splash before the cards fly:
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/readme/3samco.gif" width="150" alt="3 SÁM CÔ — the jester" /><br /><b>3 SÁM CÔ</b><br /><sub>3 triplets</sub></td>
+    <td align="center"><img src="docs/readme/sanhrong.gif" width="150" alt="SẢNH RỒNG — the dragon" /><br /><b>SẢNH RỒNG</b><br /><sub>10-card straight</sub></td>
+    <td align="center"><img src="docs/readme/5doi.gif" width="150" alt="5 ĐÔI — the assassin" /><br /><b>5 ĐÔI</b><br /><sub>5 pairs</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/readme/fulldo.gif" width="150" alt="FULL ĐỎ — the red wizard" /><br /><b>FULL ĐỎ</b><br /><sub>all-red flush</sub></td>
+    <td align="center"><img src="docs/readme/fullden.gif" width="150" alt="FULL ĐEN — the black wizard" /><br /><b>FULL ĐEN</b><br /><sub>all-black flush</sub></td>
+    <td align="center"><img src="docs/readme/tuquy2.gif" width="150" alt="TỨ QUÝ 2 — the golden knight" /><br /><b>TỨ QUÝ 2</b><br /><sub>quad of deuces</sub></td>
+  </tr>
+</table>
 
 </details>
 
@@ -160,6 +176,13 @@ win **every** trick without being blocked.
 - **Fail** (your lead gets beaten, or you give it up): pay 20 stakes to each opponent
 
 Fouling on a deuce during báo sâm also counts as a failed declaration.
+
+<img src="docs/readme/chatsam.gif" width="140" align="right" alt="CHẶT SÂM — the crowned skull" />
+
+When an opponent's play breaks your báo sâm, the crowned skull of **CHẶT SÂM** rises before
+their cards hit the table.
+
+<br clear="right" />
 
 </details>
 
@@ -215,7 +238,7 @@ authoritative server (Python / FastAPI over WebSockets) without changing the UI.
 | `scenes/table/` | The playable table: seats, dealing, tricks, payouts, combo splashes. |
 | `scenes/card`, `scenes/seat`, `scenes/ui` | Reusable card, seat and pixel-button scenes. |
 | `scripts/palette.gd`, `scripts/pixel_draw.gd` | Design-system colours and pixel-drawing helpers. |
-| `assets/` | Card sheet, deck stacks, DearPix font, splash sprite sheets. |
+| `assets/` | Card sheet, deck stacks, DearPix font, and the splash sprite sheets in `assets/splash/` (16-frame horizontal strips). |
 
 ## 🎨 Design system
 
@@ -241,7 +264,7 @@ Fonts: **DearPix** for display text, numbers and labels.
 
 - [x] Full rules engine: combos, chops, đền, thối 2, ăn trắng, báo sâm
 - [x] Offline play against bots, with a persistent coin session and elimination
-- [x] Combo cinematics (*tứ quý*, *tứ quý 2*, *sảnh rồng*)
+- [x] Combo cinematics for every ăn trắng hand, every quad, and a broken báo sâm (*chặt sâm*)
 - [ ] Bots that can báo sâm
 - [ ] Authoritative Python / FastAPI WebSocket server
 - [ ] Online multiplayer

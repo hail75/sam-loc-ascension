@@ -23,6 +23,25 @@ const TUQUY_CELL := Vector2(127, 127)
 const SANHRONG_TEX: Texture2D = preload("res://assets/splash/sanhrong.png")
 const SANHRONG_FRAMES := 16
 const SANHRONG_CELL := Vector2(200, 200)
+## "3 SÁM CÔ" (three triplets) — the jester.
+const SAMCO3_TEX: Texture2D = preload("res://assets/splash/3samco.png")
+const SAMCO3_FRAMES := 16
+const SAMCO3_CELL := Vector2(200, 200)
+## "5 ĐÔI" (five pairs) — the hooded assassin.
+const NAMDOI_TEX: Texture2D = preload("res://assets/splash/5doi.png")
+const NAMDOI_FRAMES := 16
+const NAMDOI_CELL := Vector2(147, 147)
+## "FULL ĐỎ" / "FULL ĐEN" (ten-card single-colour flush) — the red / black wizard,
+## picked by the flush's colour.
+const FULLDO_TEX: Texture2D = preload("res://assets/splash/fulldo.png")
+const FULLDEN_TEX: Texture2D = preload("res://assets/splash/fullden.png")
+const FULL_FRAMES := 16
+const FULL_CELL := Vector2(118, 118)
+## "CHẶT SÂM" — the skull, shown when an opponent's play breaks a báo sâm. It takes
+## the place of the TỨ QUÝ splash if that breaking play is itself a quad.
+const CHATSAM_TEX: Texture2D = preload("res://assets/splash/chatsam.png")
+const CHATSAM_FRAMES := 16
+const CHATSAM_CELL := Vector2(200, 200)
 ## Deck thinning states, full -> single card, stepped through as it deals.
 const DECK_STATES: Array[Texture2D] = [
 	preload("res://assets/cards/deck_stack.png"),
@@ -63,6 +82,8 @@ const SPLASH_OUT := 0.9                       # splash fade out (slow), ends as 
 ## Total blocking time of the TỨ QUÝ quad splash (slide-in + one idle pass), so the
 ## chop pop and the win settle can wait for it before the quad cards land + fly.
 const QUAD_SPLASH_TIME := SPLASH_IN + float(TUQUY_FRAMES) / SPLASH_FPS
+## Same, for the CHẶT SÂM splash that plays before a báo-sâm-breaking play lands.
+const CHATSAM_SPLASH_TIME := SPLASH_IN + float(CHATSAM_FRAMES) / SPLASH_FPS
 const SPLASH_SHAKE_TIME := 0.7               # earthquake duration as the splash crashes in
 const SPLASH_SHAKE_AMP := 22.0               # earthquake peak offset (decays to 0)
 const WIN_PAUSE := 5.0                      # hold on the winner before re-dealing (time to read win/loss + others' cards)
@@ -487,10 +508,13 @@ func _on_played(player: int, cards: Array, data: GameStateData) -> void:
 		_rebuild_last_played()
 		if not data.finished:
 			_start_turn(data)
-	# A quad (tứ quý / chặt) gets the rising-knight splash — the SAME animation as
-	# ĂN TRẮNG's TỨ QUÝ, but with NO title banner and NO screen quake. It plays first,
-	# then the cards fly to the table as usual.
-	if _is_quad(cards):
+	# A play that breaks a báo sâm gets the CHẶT SÂM skull (titled, with the quake).
+	# Otherwise a quad (tứ quý / chặt) gets the rising-knight splash — the SAME
+	# animation as ĂN TRẮNG's TỨ QUÝ, but with NO title banner and NO screen quake.
+	# Either plays first, then the cards fly to the table as usual.
+	if _breaks_bao_sam(player, data):
+		await _play_combo_splash("CHẶT SÂM", CHATSAM_TEX, CHATSAM_FRAMES, CHATSAM_CELL, _gen)
+	elif _is_quad(cards):
 		await _play_combo_splash("", TUQUY_TEX, TUQUY_FRAMES, TUQUY_CELL, _gen, false, false)
 	_fly_to_table(origins, cards, on_landed)
 
@@ -526,8 +550,9 @@ func _on_match_ended(winner: int, deltas: Array, feed: Array, balances: Array, _
 	# Wait for them to land and rest a beat so the final play reads, THEN fade the
 	# whole pile away and — once it's gone — bring up the reveal and the +/- pops
 	# together as one beat.
-	# A quad finisher plays the TỨ QUÝ splash before the cards fly, so wait it out.
-	var land_time := (QUAD_SPLASH_TIME + FLY_TIME) if _is_quad(_data.table) else FLY_TIME
+	# A quad finisher (or a báo-sâm breaker) plays its splash before the cards fly,
+	# so wait it out.
+	var land_time := _pre_fly_time(_data.table_owner, _data.table, _data) + FLY_TIME
 	await get_tree().create_timer(land_time + WIN_SETTLE).timeout
 	_fade_out_pile()
 	await get_tree().create_timer(PILE_FADE).timeout
@@ -605,14 +630,10 @@ func _resolve_an_trang(data: GameStateData, g: int) -> void:
 	_pass_btn.visible = false
 	var plays := SamLocRules.an_trang_plays(data)
 	var winner: int = plays.back()["player"]
-	# Dark-fantasy combo splash for the winning combo (art exists for some tiers).
-	var wtier := int(plays.back()["tier"])
-	if wtier == SamLocRules.AnTrang.QUAD_TWOS:
-		await _play_combo_splash("TỨ QUÝ 2", TUQUY2_TEX, TUQUY2_FRAMES, TUQUY2_CELL, g)
-		if g != _gen:
-			return
-	elif wtier == SamLocRules.AnTrang.TEN_STRAIGHT:
-		await _play_combo_splash("SẢNH RỒNG", SANHRONG_TEX, SANHRONG_FRAMES, SANHRONG_CELL, g)
+	# Dark-fantasy combo splash for the winning combo (every tier has its own art).
+	var sp := _an_trang_splash(int(plays.back()["tier"]), data.hands[winner])
+	if not sp.is_empty():
+		await _play_combo_splash(sp["title"], sp["tex"], sp["frames"], sp["cell"], g)
 		if g != _gen:
 			return
 	# Fly each combo in (only the combo cards — e.g. the four 2s, the triplet cards —
@@ -903,9 +924,10 @@ func _play_combo_splash(title: String, sheet: Texture2D, frames: int, cell: Vect
 func _on_chopped(from_player: int, to_player: int, amount: int, bals: Array) -> void:
 	var g := _gen
 	# Wait for the chopping cards to reach the table so the +/- reads as the payout.
-	# A single-quad chop plays the TỨ QUÝ splash before the cards fly; a double-quad
-	# (8 cards) flies normally.
-	var land_time := (QUAD_SPLASH_TIME + FLY_TIME) if _is_quad(GameState.data.table) else FLY_TIME
+	# A single-quad chop plays the TỨ QUÝ (or CHẶT SÂM) splash before the cards fly; a
+	# double-quad (8 cards) flies normally unless it breaks a báo sâm.
+	var gd := GameState.data
+	var land_time := _pre_fly_time(gd.table_owner, gd.table, gd) + FLY_TIME
 	await get_tree().create_timer(land_time).timeout
 	if g != _gen:
 		return
@@ -1231,6 +1253,39 @@ func _fly_to_table(origins: Array, cards: Array, on_done: Callable) -> void:
 		on_done.call())
 
 ## Four cards of one rank — a quad (tứ quý), which gets the build-up flight.
+## The ĂN TRẮNG splash for `tier` as { title, tex, frames, cell }, or {} if none.
+## The flush picks the red or black wizard from the winning hand's colour.
+func _an_trang_splash(tier: int, hand: Array) -> Dictionary:
+	match tier:
+		SamLocRules.AnTrang.THREE_TRIPLES:
+			return {"title": "3 SÁM CÔ", "tex": SAMCO3_TEX, "frames": SAMCO3_FRAMES, "cell": SAMCO3_CELL}
+		SamLocRules.AnTrang.TEN_STRAIGHT:
+			return {"title": "SẢNH RỒNG", "tex": SANHRONG_TEX, "frames": SANHRONG_FRAMES, "cell": SANHRONG_CELL}
+		SamLocRules.AnTrang.FIVE_PAIRS:
+			return {"title": "5 ĐÔI", "tex": NAMDOI_TEX, "frames": NAMDOI_FRAMES, "cell": NAMDOI_CELL}
+		SamLocRules.AnTrang.FLUSH:
+			var red := SamLocRules.card_color(hand[0]) == 0
+			return {"title": "FULL ĐỎ" if red else "FULL ĐEN",
+				"tex": FULLDO_TEX if red else FULLDEN_TEX, "frames": FULL_FRAMES, "cell": FULL_CELL}
+		SamLocRules.AnTrang.QUAD_TWOS:
+			return {"title": "TỨ QUÝ 2", "tex": TUQUY2_TEX, "frames": TUQUY2_FRAMES, "cell": TUQUY2_CELL}
+	return {}
+
+## True when `player`'s play (already applied in `data`) is the one that broke a
+## báo sâm — any opponent of the declarer landing a card ends the declaration.
+func _breaks_bao_sam(player: int, data: GameStateData) -> bool:
+	return data.bao_sam != -1 and player != data.bao_sam and data.bao_sam_failed
+
+## How long `_on_played` holds a play's cards back for its splash before they fly.
+func _pre_fly_time(player: int, cards: Array, data: GameStateData) -> float:
+	if cards.is_empty():
+		return 0.0
+	if _breaks_bao_sam(player, data):
+		return CHATSAM_SPLASH_TIME
+	if _is_quad(cards):
+		return QUAD_SPLASH_TIME
+	return 0.0
+
 func _is_quad(cards: Array) -> bool:
 	if cards.size() != 4:
 		return false

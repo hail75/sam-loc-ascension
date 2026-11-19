@@ -218,9 +218,9 @@ static func an_trang_tier(hand: Array) -> int:
 		return AnTrang.FIVE_PAIRS
 	# Ten same-colour flush: every card the same colour (rows 0–1 red, 2–3 black).
 	var flush := true
-	var color := _card_color(hand[0])
+	var color := card_color(hand[0])
 	for c in hand:
-		if _card_color(c) != color:
+		if card_color(c) != color:
 			flush = false
 			break
 	if flush:
@@ -231,7 +231,7 @@ static func an_trang_tier(hand: Array) -> int:
 	return AnTrang.NONE
 
 ## Red (0) for hearts/diamonds (rows 0–1), black (1) for spades/clubs (rows 2–3).
-static func _card_color(card: Array) -> int:
+static func card_color(card: Array) -> int:
 	return 0 if card[0] <= 1 else 1
 
 ## Every player holding an ĂN TRẮNG combo, as { player, tier }, sorted WEAKEST tier

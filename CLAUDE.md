@@ -88,10 +88,14 @@ make that migration painless:
   flush (red rows 0–1 / black rows 2–3) > quad of deuces**. Checked right after dealing
   (`an_trang_tier`/`an_trang_plays`); if anyone qualifies, all buttons/timers freeze, each
   qualifying combo flies to the table in a **golden aura** (weakest first, strongest last),
-  the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Some tiers also play a
-  **dark-fantasy splash** first (a character sheet from `assets/splash/`, e.g. `tuquy2`
-  for quad-2, `sanhrong` for the ten-straight) — dim + quake + a full-width character
-  rising from the bottom under a palette-framed title banner; see `_play_combo_splash`.
+  the banner reads "<PLAYER> ĂN TRẮNG", and the payout pops. Every tier first plays a
+  **dark-fantasy splash** (a 16-frame strip from `assets/splash/`, chosen in
+  `_an_trang_splash`): `3samco` 3 SÁM CÔ, `sanhrong` SẢNH RỒNG, `5doi` 5 ĐÔI,
+  `fulldo`/`fullden` FULL ĐỎ/ĐEN (by the flush's colour), `tuquy2` TỨ QUÝ 2 — dim + quake +
+  a full-width character rising from the bottom under a palette-framed title banner; see
+  `_play_combo_splash`. In play, a quad gets the banner-less `tuquy` knight, and a play that
+  breaks a báo sâm gets the `chatsam` skull ("CHẶT SÂM") instead (`_breaks_bao_sam`,
+  `_pre_fly_time` keeps the land/settle timers in sync).
   Scoring (like báo sâm): each
   loser pays a flat **20 stake**, winner sweeps it (+60 total). Money is deferred to
   `GameState.commit_an_trang()` (called at the +/- beat) so the deal
