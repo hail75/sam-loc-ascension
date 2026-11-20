@@ -100,7 +100,7 @@ make that migration painless:
   loser pays a flat **20 stake**, winner sweeps it (+60 total). Money is deferred to
   `GameState.commit_an_trang()` (called at the +/- beat) so the deal
   shows pre-win balances. **DEBUG:** `GameState.AN_TRANG_DEBUG` forces Vayne (seat 2) to hold
-  the four 2s every deal — turn OFF for real play.
+  `AN_TRANG_DEBUG_HAND` every deal (currently an A–10 straight → SẢNH RỒNG) — turn OFF for real play.
 - **Báo sâm (the namesake ritual):** before each deal there's a claim window. A player may
   declare *báo sâm* to grab the open right and lead; they must then win every trick
   **unblocked** (run the whole hand). Success → +20 stake from each opponent (+60 stake

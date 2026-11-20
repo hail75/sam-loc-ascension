@@ -49,6 +49,24 @@ legendary hand. The title comes from
   <sub>A ten-card straight. Deal it and you win on the spot: <b>ăn trắng</b>.</sub>
 </div>
 
+## 📸 In game
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/readme/screens/01_bao_sam.png" width="160" alt="The báo sâm claim window after the deal" /><br /><sub><b>BÁO SÂM?</b><br />the claim window</sub></td>
+    <td align="center"><img src="docs/readme/screens/02_trick.png" width="160" alt="Your turn, answering a straight on the table" /><br /><sub><b>LƯỢT CỦA BẠN</b><br />your turn</sub></td>
+    <td align="center"><img src="docs/readme/screens/03_sanh_rong.png" width="160" alt="The SẢNH RỒNG dragon splash" /><br /><sub><b>SẢNH RỒNG</b><br />a ten-card straight</sub></td>
+    <td align="center"><img src="docs/readme/screens/04_an_trang.png" width="160" alt="Vayne wins on the deal with a golden-aura straight" /><br /><sub><b>ĂN TRẮNG</b><br />instant win, +600</sub></td>
+    <td align="center"><img src="docs/readme/screens/05_win.png" width="160" alt="End of a deal: Grimwald wins and the losers' hands are revealed" /><br /><sub><b>GRIMWALD THẮNG</b><br />payouts and reveal</sub></td>
+  </tr>
+</table>
+
+<sub>Captured from the Godot 4.6 build at 720 × 1280. Hero portraits aren't in yet, so the seat frames are empty.</sub>
+
+</div>
+
 ## ✨ Features
 
 - 🃏 **Full Sâm Lốc rules engine**: singles, pairs, triples, quads, straights, chops and every
@@ -203,8 +221,9 @@ Press **F5** to play. The main scene is `scenes/table/table_a.tscn`.
 > renderer (OpenGL ES 3 / WebGL2), so the same build runs in a browser and on older phones.
 
 > [!NOTE]
-> Set `GameState.AN_TRANG_DEBUG = true` (in `autoload/game_state.gd`) to deal Vayne all four
-> deuces every hand, which makes the ăn trắng cinematic easy to test. Keep it `false` for real play.
+> Set `GameState.AN_TRANG_DEBUG = true` (in `autoload/game_state.gd`) to deal Vayne
+> `AN_TRANG_DEBUG_HAND` every hand (an A–10 straight by default, so SẢNH RỒNG), which makes the
+> ăn trắng cinematic easy to test. Swap that hand to try other tiers. Keep the flag `false` for real play.
 
 ## 🏰 Architecture
 
